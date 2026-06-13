@@ -85,18 +85,18 @@ final class GeminiLiveClient: NSObject {
     //   - echoTargetLanguage:false → 입력이 이미 타겟 언어면 출력 침묵
     // ───────────────────────────────────────────────
     private func sendSetup(sourceLang: String, targetLang: String) {
-        let shortTarget = String(targetLang.prefix { $0 != "-" })
-
+        // 언어 코드(BCP-47)를 그대로 사용 (예: "ko","en","zh-Hans","pt-BR")
         let setup: [String: Any] = [
             "setup": [
                 "model": "models/\(model)",
                 "generationConfig": [
                     "responseModalities": ["AUDIO"],
                     "translationConfig": [
-                        "targetLanguageCode": shortTarget,
+                        "targetLanguageCode": targetLang,
                         "echoTargetLanguage": false
                     ]
                 ],
+
                 "inputAudioTranscription": [:],
                 "outputAudioTranscription": [:]
             ]

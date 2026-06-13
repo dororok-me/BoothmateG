@@ -2,35 +2,29 @@
 //  AppSettings.swift
 //  BoothmateG
 //
-//  Version: 1.1.0
+//  Version: 1.2.0
 //  Changelog:
 //    1.0.0 - 최초 작성. API 키, 언어쌍, 용어집 저장 관리
 //    1.1.0 - 용어집을 CSV 호환 구조(GlossaryItem 배열)로 변경
+//    1.2.0 - 지원 언어 전체(70여 개) 추가. 언어 코드를 BCP-47(ko, en, zh-Hans...)로 변경.
+//            기본값 sourceLang="ko", targetLang="en"
 //
 
 import SwiftUI
 import Combine
 
-// 앱 전역 설정을 담는 클래스.
-// @AppStorage로 저장하면 앱을 껐다 켜도 값이 유지됨.
 final class AppSettings: ObservableObject {
 
-    // Gemini API 키 (BYOK - 사용자가 직접 입력)
     @AppStorage("geminiApiKey") var geminiApiKey: String = ""
 
-    // 원본 언어 (말하는 사람의 언어)
-    @AppStorage("sourceLang") var sourceLang: String = "ko-KR"
+    // 언어 코드는 BCP-47 (Gemini Live Translate가 받는 형식)
+    @AppStorage("sourceLang") var sourceLang: String = "ko"
+    @AppStorage("targetLang") var targetLang: String = "en"
 
-    // 번역 목표 언어
-    @AppStorage("targetLang") var targetLang: String = "en-US"
-
-    // 번역된 음성을 재생할지 여부 (기본 끔 - 자막만)
     @AppStorage("playTranslatedAudio") var playTranslatedAudio: Bool = false
 
-    // 용어집을 JSON 문자열로 저장 (CSV 가져오기/내보내기와 호환되는 구조)
     @AppStorage("glossaryJSON") var glossaryJSON: String = "[]"
 
-    // 저장된 JSON을 GlossaryItem 배열로 읽어오기
     func loadGlossary() -> [GlossaryItem] {
         guard let data = glossaryJSON.data(using: .utf8),
               let items = try? JSONDecoder().decode([GlossaryItem].self, from: data)
@@ -38,7 +32,6 @@ final class AppSettings: ObservableObject {
         return items
     }
 
-    // GlossaryItem 배열을 JSON 문자열로 저장하기
     func saveGlossary(_ items: [GlossaryItem]) {
         guard let data = try? JSONEncoder().encode(items),
               let str = String(data: data, encoding: .utf8)
@@ -47,22 +40,99 @@ final class AppSettings: ObservableObject {
     }
 }
 
-// 앱에서 지원하는 언어 목록 (드롭다운용)
+// 드롭다운용 언어 항목
 struct LangOption: Identifiable, Hashable {
-    let id: String      // 예: "ko-KR"
-    let label: String   // 예: "한국어"
+    let id: String      // BCP-47 코드 (예: "ko", "en", "zh-Hans")
+    let label: String
 }
 
+// Gemini Live Translate 지원 언어 전체 (70여 개)
+// 자주 쓰는 언어를 위로, 나머지는 알파벳 순
 let supportedLanguages: [LangOption] = [
-    LangOption(id: "ko-KR", label: "한국어"),
-    LangOption(id: "en-US", label: "English"),
-    LangOption(id: "ja-JP", label: "日本語"),
-    LangOption(id: "zh-CN", label: "中文")
+    LangOption(id: "ko",      label: "Korean (한국어)"),
+    LangOption(id: "en",      label: "English"),
+    LangOption(id: "ja",      label: "Japanese (日本語)"),
+    LangOption(id: "zh-Hans", label: "Chinese, Simplified (简体)"),
+    LangOption(id: "zh-Hant", label: "Chinese, Traditional (繁體)"),
+
+    LangOption(id: "af",  label: "Afrikaans"),
+    LangOption(id: "ak",  label: "Akan"),
+    LangOption(id: "sq",  label: "Albanian"),
+    LangOption(id: "am",  label: "Amharic"),
+    LangOption(id: "ar",  label: "Arabic"),
+    LangOption(id: "hy",  label: "Armenian"),
+    LangOption(id: "az",  label: "Azerbaijani"),
+    LangOption(id: "eu",  label: "Basque"),
+    LangOption(id: "be",  label: "Belarusian"),
+    LangOption(id: "bn",  label: "Bengali"),
+    LangOption(id: "bg",  label: "Bulgarian"),
+    LangOption(id: "my",  label: "Burmese"),
+    LangOption(id: "ca",  label: "Catalan"),
+    LangOption(id: "hr",  label: "Croatian"),
+    LangOption(id: "cs",  label: "Czech"),
+    LangOption(id: "da",  label: "Danish"),
+    LangOption(id: "nl",  label: "Dutch"),
+    LangOption(id: "et",  label: "Estonian"),
+    LangOption(id: "fil", label: "Filipino"),
+    LangOption(id: "fi",  label: "Finnish"),
+    LangOption(id: "fr",  label: "French"),
+    LangOption(id: "gl",  label: "Galician"),
+    LangOption(id: "ka",  label: "Georgian"),
+    LangOption(id: "de",  label: "German"),
+    LangOption(id: "el",  label: "Greek"),
+    LangOption(id: "gu",  label: "Gujarati"),
+    LangOption(id: "ha",  label: "Hausa"),
+    LangOption(id: "he",  label: "Hebrew"),
+    LangOption(id: "hi",  label: "Hindi"),
+    LangOption(id: "hu",  label: "Hungarian"),
+    LangOption(id: "is",  label: "Icelandic"),
+    LangOption(id: "id",  label: "Indonesian"),
+    LangOption(id: "it",  label: "Italian"),
+    LangOption(id: "jv",  label: "Javanese"),
+    LangOption(id: "kn",  label: "Kannada"),
+    LangOption(id: "kk",  label: "Kazakh"),
+    LangOption(id: "km",  label: "Khmer"),
+    LangOption(id: "rw",  label: "Kinyarwanda"),
+    LangOption(id: "lo",  label: "Lao"),
+    LangOption(id: "lv",  label: "Latvian"),
+    LangOption(id: "lt",  label: "Lithuanian"),
+    LangOption(id: "mk",  label: "Macedonian"),
+    LangOption(id: "ms",  label: "Malay"),
+    LangOption(id: "ml",  label: "Malayalam"),
+    LangOption(id: "mr",  label: "Marathi"),
+    LangOption(id: "mn",  label: "Mongolian"),
+    LangOption(id: "ne",  label: "Nepali"),
+    LangOption(id: "no",  label: "Norwegian"),
+    LangOption(id: "fa",  label: "Persian"),
+    LangOption(id: "pl",  label: "Polish"),
+    LangOption(id: "pt-BR", label: "Portuguese (Brazil)"),
+    LangOption(id: "pt-PT", label: "Portuguese (Portugal)"),
+    LangOption(id: "pa",  label: "Punjabi"),
+    LangOption(id: "ro",  label: "Romanian"),
+    LangOption(id: "ru",  label: "Russian"),
+    LangOption(id: "sr",  label: "Serbian"),
+    LangOption(id: "sd",  label: "Sindhi"),
+    LangOption(id: "si",  label: "Sinhala"),
+    LangOption(id: "sk",  label: "Slovak"),
+    LangOption(id: "sl",  label: "Slovenian"),
+    LangOption(id: "es",  label: "Spanish"),
+    LangOption(id: "su",  label: "Sundanese"),
+    LangOption(id: "sw",  label: "Swahili"),
+    LangOption(id: "sv",  label: "Swedish"),
+    LangOption(id: "ta",  label: "Tamil"),
+    LangOption(id: "te",  label: "Telugu"),
+    LangOption(id: "th",  label: "Thai"),
+    LangOption(id: "tr",  label: "Turkish"),
+    LangOption(id: "uk",  label: "Ukrainian"),
+    LangOption(id: "ur",  label: "Urdu"),
+    LangOption(id: "uz",  label: "Uzbek"),
+    LangOption(id: "vi",  label: "Vietnamese"),
+    LangOption(id: "zu",  label: "Zulu"),
 ]
 
-// 용어집 한 항목 = 원문 용어 하나 + 지정 번역 하나
+// 용어집 한 항목
 struct GlossaryItem: Identifiable, Codable, Hashable {
     var id = UUID()
-    var source: String   // 원문 용어 (예: "탄소중립")
-    var target: String   // 지정 번역 (예: "carbon neutrality")
+    var source: String
+    var target: String
 }

@@ -2,14 +2,11 @@
 //  ContentView.swift
 //  BoothmateG
 //
-//  Version: 2.10.0
+//  Version: 2.10.1
 //  Changelog:
-//    ... (이전 이력 생략) ...
 //    2.9.0  - 양방향 자동 (DualTranslateClient)
-//    2.10.0 - 메인 콘솔 다듬기:
-//             (1) 시작/정지 버튼 직관화 (아이콘 ▶/■ + 초록/빨강 색)
-//             (2) "지우기" → "자막 리셋" (아이콘 추가)
-//             (3) 시작 버튼 옆 세션 진행시간 00:00:00 표시, 정지 시 자동 리셋
+//    2.10.0 - 시작/정지 직관화, 자막 리셋, 세션 타이머
+//    2.10.1 - 전체 언어 지원 대응: 예전 언어 코드 자동 정리(migrateLanguageCodes)
 //
 
 import SwiftUI
@@ -34,7 +31,6 @@ struct ContentView: View {
     @State private var isEditing: Bool = false
     @State private var currentInputName: String = ""
 
-    // 세션 시작 시각 (nil이면 미실행 → 타이머 00:00:00)
     @State private var sessionStart: Date? = nil
 
     @AppStorage("console_targetFont") private var targetFont: Double = 18
@@ -58,6 +54,7 @@ struct ContentView: View {
         .onAppear {
             glossary.update(items: settings.loadGlossary())
             refreshInputName()
+            migrateLanguageCodes()
         }
         .sheet(isPresented: $showGlossary) {
             GlossaryView(settings: settings) { items in
@@ -78,7 +75,11 @@ struct ContentView: View {
     // ── 헤더 ──
     private var headerBar: some View {
         HStack {
-            Text("BoothmateG").font(.title2).bold()
+            Image("BoothmateG_logo_512")
+                .resizable()
+                .scaledToFit()
+                .frame(height: 28)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
             Spacer()
             Button {
                 overlayController.toggle(store: subtitles, glossary: glossary, mainWindow: NSApp.keyWindow)
@@ -97,7 +98,7 @@ struct ContentView: View {
         }
     }
 
-    // ── 입력 줄 (언어쌍 + 스왑 + 시작/정지 + 타이머 + 자막 리셋) ──
+    // ── 입력 줄 ──
     private var controlsRow: some View {
         HStack(spacing: 12) {
             langPicker($settings.sourceLang)
@@ -111,7 +112,6 @@ struct ContentView: View {
 
             langPicker($settings.targetLang)
 
-            // (1) 직관적인 시작/정지 버튼
             Button {
                 if isRunning { stop() } else { start() }
             } label: {
@@ -125,7 +125,6 @@ struct ContentView: View {
             .buttonStyle(.borderedProminent)
             .tint(isRunning ? .red : .green)
 
-            // (3) 세션 진행시간 (1초마다 갱신, 정지 시 00:00:00)
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 let e = sessionStart.map { max(0, context.date.timeIntervalSince($0)) } ?? 0
                 Text(formatElapsed(e))
@@ -136,7 +135,6 @@ struct ContentView: View {
 
             Spacer()
 
-            // (2) 자막 리셋
             Button {
                 subtitles.clear()
             } label: {
@@ -156,7 +154,7 @@ struct ContentView: View {
             }
         }
         .labelsHidden()
-        .frame(width: 110)
+        .frame(width: 150)
         .disabled(isRunning)
     }
 
@@ -247,6 +245,13 @@ struct ContentView: View {
         }
     }
 
+    // 예전 코드("ko-KR" 등)가 새 목록에 없으면 기본값으로 정리
+    private func migrateLanguageCodes() {
+        let ids = Set(supportedLanguages.map { $0.id })
+        if !ids.contains(settings.sourceLang) { settings.sourceLang = "ko" }
+        if !ids.contains(settings.targetLang) { settings.targetLang = "en" }
+    }
+
     private func swapLanguages() {
         let s = settings.sourceLang
         settings.sourceLang = settings.targetLang
@@ -306,7 +311,7 @@ struct ContentView: View {
         do {
             try audio.start()
             isRunning = true
-            sessionStart = Date()            // 타이머 시작
+            sessionStart = Date()
         } catch {
             statusMessage = "❌ 마이크 시작 실패: \(error.localizedDescription)"
             client.disconnect()
@@ -317,7 +322,7 @@ struct ContentView: View {
         audio.stop()
         client.disconnect()
         isRunning = false
-        sessionStart = nil                   // 타이머 리셋
+        sessionStart = nil
         statusMessage = "정지됨"
     }
 }
