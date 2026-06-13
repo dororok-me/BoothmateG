@@ -2,18 +2,19 @@
 //  ConsoleSettingsView.swift
 //  BoothmateG
 //
-//  Version: 1.0.0
+//  Version: 1.1.0
 //  Changelog:
-//    1.0.0 - 최초 작성. 메인 콘솔 설정 시트
-//            - 번역/원문 글자 크기
-//            - 야간 모드(Night View)
-//            ※ @AppStorage 키를 ContentView와 공유 → 변경 즉시 콘솔에 반영
+//    1.0.0 - 최초 작성. 글자 크기 + 야간 모드
+//    1.1.0 - 맨 아래에 Gemini API 키 입력 추가 (메인 콘솔에서 이관)
 //
 
 import SwiftUI
 
 struct ConsoleSettingsView: View {
     @Environment(\.dismiss) private var dismiss
+
+    // API 키는 AppSettings에 저장 → 같은 객체를 직접 편집
+    @ObservedObject var settings: AppSettings
 
     // ContentView와 동일한 키를 사용 → 자동 동기화
     @AppStorage("console_targetFont") private var targetFont: Double = 18
@@ -80,6 +81,17 @@ struct ConsoleSettingsView: View {
                 .cornerRadius(6)
             }
 
+            Divider()
+
+            // ── Gemini API 키 (가장 아래) ──
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Gemini API 키").font(.subheadline.weight(.semibold))
+                SecureField("API 키를 입력하세요", text: $settings.geminiApiKey)
+                    .textFieldStyle(.roundedBorder)
+                Text("입력한 키는 이 기기에만 저장됩니다 (BYOK).")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+
             Spacer(minLength: 0)
 
             Button("닫기") { dismiss() }
@@ -87,7 +99,7 @@ struct ConsoleSettingsView: View {
                 .frame(maxWidth: .infinity)
         }
         .padding(20)
-        .frame(width: 440, height: 380)
+        .frame(width: 460, height: 480)
         .preferredColorScheme(night ? .dark : nil)
     }
 }
