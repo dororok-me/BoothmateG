@@ -2,13 +2,14 @@
 //  ContentView.swift
 //  BoothmateG
 //
-//  Version: 2.9.0
+//  Version: 2.10.0
 //  Changelog:
 //    ... (이전 이력 생략) ...
-//    2.8.0 - 언어 즉시 스왑, API 키 설정 이관, 입력 소스 선택
-//    2.9.0 - 양방향 자동: GeminiLiveClient → DualTranslateClient 로 교체.
-//            언어쌍(소스/타겟 칸) 두 세션 동시 운용 → 말한 언어 반대로 자동 표시.
-//            ※ 두 언어 칸은 이제 "방향"이 아니라 "언어쌍"을 정함.
+//    2.9.0  - 양방향 자동 (DualTranslateClient)
+//    2.10.0 - 메인 콘솔 다듬기:
+//             (1) 시작/정지 버튼 직관화 (아이콘 ▶/■ + 초록/빨강 색)
+//             (2) "지우기" → "자막 리셋" (아이콘 추가)
+//             (3) 시작 버튼 옆 세션 진행시간 00:00:00 표시, 정지 시 자동 리셋
 //
 
 import SwiftUI
@@ -19,7 +20,7 @@ struct ContentView: View {
     @StateObject private var subtitles = SubtitleStore()
 
     @State private var audio = AudioEngine()
-    @State private var client = DualTranslateClient()   // ← 양방향 듀얼 세션
+    @State private var client = DualTranslateClient()
     @State private var glossary = GlossaryEngine()
 
     @State private var overlayController = OverlayWindowController()
@@ -32,6 +33,9 @@ struct ContentView: View {
 
     @State private var isEditing: Bool = false
     @State private var currentInputName: String = ""
+
+    // 세션 시작 시각 (nil이면 미실행 → 타이머 00:00:00)
+    @State private var sessionStart: Date? = nil
 
     @AppStorage("console_targetFont") private var targetFont: Double = 18
     @AppStorage("console_sourceFont") private var sourceFont: Double = 14
@@ -93,7 +97,7 @@ struct ContentView: View {
         }
     }
 
-    // ── 입력 줄 (언어쌍 + 스왑 + 시작/정지/지우기) ──
+    // ── 입력 줄 (언어쌍 + 스왑 + 시작/정지 + 타이머 + 자막 리셋) ──
     private var controlsRow: some View {
         HStack(spacing: 12) {
             langPicker($settings.sourceLang)
@@ -107,16 +111,41 @@ struct ContentView: View {
 
             langPicker($settings.targetLang)
 
-            Button(isRunning ? "정지" : "시작") {
+            // (1) 직관적인 시작/정지 버튼
+            Button {
                 if isRunning { stop() } else { start() }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: isRunning ? "stop.fill" : "play.fill")
+                    Text(isRunning ? "정지" : "시작")
+                }
+                .frame(minWidth: 56)
             }
             .keyboardShortcut(.return, modifiers: [])
             .buttonStyle(.borderedProminent)
+            .tint(isRunning ? .red : .green)
 
-            Button("지우기") { subtitles.clear() }
-                .disabled(subtitles.segments.isEmpty && subtitles.currentSource.isEmpty)
+            // (3) 세션 진행시간 (1초마다 갱신, 정지 시 00:00:00)
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                let e = sessionStart.map { max(0, context.date.timeIntervalSince($0)) } ?? 0
+                Text(formatElapsed(e))
+                    .font(.system(.body, design: .monospaced))
+                    .monospacedDigit()
+                    .foregroundStyle(sessionStart != nil ? .primary : .secondary)
+            }
 
             Spacer()
+
+            // (2) 자막 리셋
+            Button {
+                subtitles.clear()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.counterclockwise")
+                    Text("자막 리셋")
+                }
+            }
+            .disabled(subtitles.segments.isEmpty && subtitles.currentSource.isEmpty)
         }
     }
 
@@ -129,6 +158,12 @@ struct ContentView: View {
         .labelsHidden()
         .frame(width: 110)
         .disabled(isRunning)
+    }
+
+    // HH:MM:SS
+    private func formatElapsed(_ t: TimeInterval) -> String {
+        let total = Int(t)
+        return String(format: "%02d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60)
     }
 
     // ── 자막 목록 ──
@@ -212,7 +247,6 @@ struct ContentView: View {
         }
     }
 
-    // ── 언어쌍 순서 스왑 ──
     private func swapLanguages() {
         let s = settings.sourceLang
         settings.sourceLang = settings.targetLang
@@ -263,7 +297,6 @@ struct ContentView: View {
             client.sendAudio(data)
         }
 
-        // 언어쌍: A = 타겟 칸, B = 소스 칸 (방향은 자동 감지)
         client.connect(
             apiKey: settings.geminiApiKey,
             langA: settings.targetLang,
@@ -273,6 +306,7 @@ struct ContentView: View {
         do {
             try audio.start()
             isRunning = true
+            sessionStart = Date()            // 타이머 시작
         } catch {
             statusMessage = "❌ 마이크 시작 실패: \(error.localizedDescription)"
             client.disconnect()
@@ -283,6 +317,7 @@ struct ContentView: View {
         audio.stop()
         client.disconnect()
         isRunning = false
+        sessionStart = nil                   // 타이머 리셋
         statusMessage = "정지됨"
     }
 }
