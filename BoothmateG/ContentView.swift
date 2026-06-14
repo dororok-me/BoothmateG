@@ -2,13 +2,12 @@
 //  ContentView.swift
 //  BoothmateG
 //
-//  Version: 2.29.0
+//  Version: 2.34.0
 //  Changelog:
-//    2.26.0 - 음성 지원 배지 문구 '음성 지원' → '음성 지원 중'.
-//    2.27.0 - 모니터 아이콘 옆에 '음성지원' 토글 버튼 추가. 칼럼 폭 380 / 최소폭 1000.
-//    2.28.0 - 다국어 모드 음성 지원: 청중 언어 중 하나를 골라 그 언어의 번역 음성만 재생.
-//    2.29.0 - 청중 언어에서 화자 언어를 항상 제외(로드/저장/시작 시).
-//             기본값에 화자(영어)가 섞여 영어 빈 오버레이가 뜨던 문제 수정.
+//    2.31.0 - 다국어 화자를 단일 소스와 분리(multiSourceLang). 헤더에 화자 선택 picker.
+//    2.32.0 - 청중 송출: QR 세션 선택 + 송출 토글. 자막을 FirebaseRelay로 실시간 송출.
+//    2.33.0 - 송출 버튼 문구 '송출/송출 중' → '자막 송출 시작/자막 송출 중'.
+//    2.34.0 - 송출 옆에 'QR 보기' 버튼 추가(선택 세션의 QR을 바로 띄움, BroadcastQRView).
 //
 
 import SwiftUI
@@ -24,7 +23,10 @@ struct ContentView: View {
     @State private var multiClient = MultiTranslateClient()
     @State private var glossary = GlossaryEngine()
     @State private var audioPlayer = TranslatedAudioPlayer()
-
+    @ObservedObject private var relay = FirebaseRelay.shared
+    @State private var audioBroadcaster = AudioBroadcaster()
+    @State private var showHostLogin = false
+    
     @State private var overlayController = OverlayWindowController()
     @State private var multiOverlay = MultiOverlayController()
 
@@ -35,10 +37,17 @@ struct ContentView: View {
     @State private var showSettings: Bool = false
     @State private var showInputSource: Bool = false
     @State private var showAudienceLangs: Bool = false
+    @State private var showAudienceQR: Bool = false
 
     @State private var isEditing: Bool = false
     @State private var currentInputName: String = ""
     @State private var audienceLangs: [String] = []
+
+    // 청중 송출
+    @AppStorage("audienceQREventJSON") private var audienceQREventJSON: String = ""
+    @State private var broadcastSessionId: String = ""
+    @State private var broadcasting: Bool = false
+    @State private var showBroadcastQR: Bool = false
 
     @State private var sessionStart: Date? = nil
     @State private var multiSessionStart: Date? = nil
@@ -63,7 +72,7 @@ struct ContentView: View {
             glossary.update(items: settings.loadGlossary())
             refreshInputName()
             migrateLanguageCodes()
-            audienceLangs = settings.loadAudienceLangs().filter { $0 != settings.sourceLang }
+            audienceLangs = settings.loadAudienceLangs().filter { $0 != settings.multiSourceLang }
             multiStore.setLanguages(audienceLangs)
         }
         .onChange(of: settings.playTranslatedAudio) { _, on in
@@ -72,6 +81,11 @@ struct ContentView: View {
         .onChange(of: settings.multiAudioLang) { _, lang in
             guard isMultiRunning else { return }
             if lang.isEmpty { audioPlayer.stop() } else { audioPlayer.start() }
+        }
+        .onChange(of: settings.multiSourceLang) { _, src in
+            // 화자로 고른 언어는 청중에서 빠져야 함 (영어 화자 → 영어 청중 같은 빈 세션 방지)
+            audienceLangs = audienceLangs.filter { $0 != src }
+            multiStore.setLanguages(audienceLangs)
         }
         .sheet(isPresented: $showGlossary) {
             GlossaryView(settings: settings) { items in glossary.update(items: items) }
@@ -87,9 +101,16 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showAudienceLangs) {
             AudienceLangView(settings: settings) { langs in
-                audienceLangs = langs.filter { $0 != settings.sourceLang }
+                audienceLangs = langs.filter { $0 != settings.multiSourceLang }
                 multiStore.setLanguages(audienceLangs)
             }
+        }
+        .sheet(isPresented: $showAudienceQR) {
+            AudienceQRView()
+        }
+        .sheet(isPresented: $showBroadcastQR) {
+            BroadcastQRView(sessionId: broadcastSessionId)
+
         }
     }
 
@@ -210,7 +231,17 @@ struct ContentView: View {
             HStack(spacing: 5) {
                 Image(systemName: "globe").font(.caption)
                 Text("다국어").font(.caption.bold())
-                Text("· 화자 \(sourceShort)").font(.caption2)
+                Text("· 화자").font(.caption2)
+                Picker("", selection: $settings.multiSourceLang) {
+                    ForEach(supportedLanguages) { lang in
+                        Text(lang.label).tag(lang.id)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .controlSize(.small)
+                .fixedSize()
+                .disabled(isRunning || isMultiRunning)
             }
             .foregroundStyle(.secondary)
 
@@ -432,36 +463,92 @@ struct ContentView: View {
         }
     }
 
-    // ── 하단: 입력 소스 + 설정/용어집 + 상태 ──
-    private var inputSourceBar: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "mic").foregroundStyle(.secondary)
-            Button { showInputSource = true } label: {
-                Text("입력 소스: \(currentInputName.isEmpty ? "기본 장치" : currentInputName)")
-                    .font(.caption)
+    // ── 하단: 입력 소스 + 설정/용어집 + 청중 송출 (2줄·크게) ──
+        private var inputSourceBar: some View {
+            VStack(alignment: .leading, spacing: 8) {
+                // 1줄: 입력 소스 · 설정 · 용어집 · 청중 QR
+                HStack(spacing: 12) {
+                    Image(systemName: "mic").foregroundStyle(.secondary)
+                    Button { showInputSource = true } label: {
+                        HStack(spacing: 4) {
+                            Text("입력 소스: \(currentInputName.isEmpty ? "기본 장치" : currentInputName)")
+                            Image(systemName: "chevron.up.chevron.down").foregroundStyle(.secondary)
+                        }.font(.body)
+                    }
+                    .buttonStyle(.plain)
+
+                    Divider().frame(height: 20)
+
+                    Button { showSettings = true } label: {
+                        HStack(spacing: 5) { Image(systemName: "gearshape"); Text("설정") }.font(.body)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button { showGlossary = true } label: {
+                        HStack(spacing: 5) { Image(systemName: "character.book.closed"); Text("용어집") }.font(.body)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button { showAudienceQR = true } label: {
+                        HStack(spacing: 5) { Image(systemName: "qrcode"); Text("청중 QR") }.font(.body)
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer()
+                }
+                .imageScale(.large)
+
+                // 2줄: 송출 표시 · 세션 선택 · 로그인 · 송출 · QR · 리셋
+                HStack(spacing: 10) {
+                    Image(systemName: broadcasting ? "dot.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right")
+                        .font(.body).foregroundStyle(broadcasting ? .red : .secondary)
+                    Picker("", selection: $broadcastSessionId) {
+                        Text("세션 선택").tag("")
+                        ForEach(qrSessions) { s in Text(sessionLabel(s)).tag(s.id) }
+                    }
+                    .labelsHidden().pickerStyle(.menu).controlSize(.large).fixedSize()
+                    .disabled(broadcasting)
+
+                    Button { showHostLogin = true } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: relay.authReady ? "checkmark.seal.fill" : "person.crop.circle.badge.exclamationmark")
+                            Text(relay.authReady ? "호스트" : "로그인")
+                        }.font(.body)
+                    }
+                    .buttonStyle(.bordered).controlSize(.large)
+                    .tint(relay.authReady ? .green : .orange)
+
+                    Button {
+                        broadcasting.toggle()
+                        if broadcasting { beginBroadcastIfNeeded() }
+                        else { relay.stopBroadcast(); audioBroadcaster.stop(); statusMessage = "송출 중지" }
+                    } label: {
+                        Text(broadcasting ? "자막 송출 중" : "자막 송출 시작").font(.body)
+                    }
+                    .buttonStyle(.bordered).controlSize(.large)
+                    .tint(broadcasting ? .red : .blue)
+                    .disabled(broadcastSessionId.isEmpty || !relay.authReady)
+
+                    Button { showBroadcastQR = true } label: {
+                        HStack(spacing: 4) { Image(systemName: "qrcode.viewfinder"); Text("QR 보기") }.font(.body)
+                    }
+                    .buttonStyle(.bordered).controlSize(.large)
+                    .disabled(broadcastSessionId.isEmpty)
+
+                    Button { resetSubtitles() } label: {
+                        HStack(spacing: 4) { Image(systemName: "trash"); Text("자막 리셋") }.font(.body)
+                    }
+                    .buttonStyle(.bordered).controlSize(.large)
+                    .tint(.orange)
+                    .disabled(broadcastSessionId.isEmpty)
+
+                    Spacer()
+
+                    Text(statusMessage).font(.callout).foregroundStyle(.secondary)
+                }
             }
-            .buttonStyle(.plain)
-            Image(systemName: "chevron.up.chevron.down")
-                .font(.caption2).foregroundStyle(.secondary)
-
-            Divider().frame(height: 14)
-
-            Button { showSettings = true } label: {
-                HStack(spacing: 4) { Image(systemName: "gearshape"); Text("설정") }.font(.caption)
-            }
-            .buttonStyle(.plain)
-
-            Button { showGlossary = true } label: {
-                HStack(spacing: 4) { Image(systemName: "character.book.closed"); Text("용어집") }.font(.caption)
-            }
-            .buttonStyle(.plain)
-
-            Spacer()
-
-            Text(statusMessage).font(.caption).foregroundStyle(.secondary)
         }
-    }
-
+    
     private func refreshInputName() {
         if let id = AudioDeviceManager.defaultInputDevice() {
             currentInputName = AudioDeviceManager.deviceName(id) ?? ""
@@ -472,6 +559,73 @@ struct ContentView: View {
         let ids = Set(supportedLanguages.map { $0.id })
         if !ids.contains(settings.sourceLang) { settings.sourceLang = "ko" }
         if !ids.contains(settings.targetLang) { settings.targetLang = "en" }
+        if !ids.contains(settings.multiSourceLang) { settings.multiSourceLang = "ko" }
+    }
+
+    // ── 청중 송출 ──
+    private var qrSessions: [QRSession] {
+        guard let d = audienceQREventJSON.data(using: .utf8),
+              let ev = try? JSONDecoder().decode(QREvent.self, from: d) else { return [] }
+        return ev.sessions
+    }
+    private func sessionLabel(_ s: QRSession) -> String {
+        let l = [s.date, s.name].filter { !$0.isEmpty }.joined(separator: " · ")
+        return l.isEmpty ? "세션" : l
+    }
+    private func qrSessionInfo(_ id: String) -> (event: String, session: String)? {
+        guard let d = audienceQREventJSON.data(using: .utf8),
+              let ev = try? JSONDecoder().decode(QREvent.self, from: d),
+              let s = ev.sessions.first(where: { $0.id == id }) else { return nil }
+        return (ev.name, sessionLabel(s))
+    }
+    private func langLabel(_ code: String) -> String {
+        supportedLanguages.first { $0.id == code }?.label ?? code
+    }
+
+    // 송출 시작 (실행 중 + 송출 ON + 세션 선택돼 있을 때만 meta 기록)
+    private func resetSubtitles() {
+            subtitles.clear()                      // 단일 자막 비우기
+            multiStore.clear()                     // 다국어 자막 비우기
+            relay.clearLive(broadcastSessionId)    // RTDB 라이브 자막·음성 삭제
+            audioBroadcaster.reset()               // 진행 중 음성 버퍼 폐기
+            statusMessage = "자막 초기화됨"
+        }
+    
+    private func beginBroadcastIfNeeded() {
+        guard broadcasting, !broadcastSessionId.isEmpty, (isRunning || isMultiRunning) else { return }
+        guard let info = qrSessionInfo(broadcastSessionId) else {
+            statusMessage = "❌ 송출할 세션을 선택하세요"; return
+        }
+        var langs: [String: String] = [:]
+        let mode: String
+        if isMultiRunning {
+            mode = "multi"
+            for c in audienceLangs { langs[c] = langLabel(c) }
+        } else {
+            mode = "single"
+            langs[settings.targetLang] = langLabel(settings.targetLang)
+        }
+        relay.startBroadcast(sessionId: broadcastSessionId, eventName: info.event,
+                             sessionName: info.session, mode: mode, langs: langs)
+        audioBroadcaster.start(sessionId: broadcastSessionId)
+        statusMessage = "📡 청중 송출 중"
+    }
+
+    // 단일 모드 자막 송출
+    private func relaySingle() {
+        guard relay.active else { return }
+        let lines = Array(subtitles.segments.map { $0.targetText }.suffix(60))
+        relay.updateLive(lang: settings.targetLang, current: subtitles.currentTarget, lines: lines)
+    }
+    // 다국어 모드 자막 송출 (언어 1개)
+    private func relayMulti(_ lang: String) {
+        guard relay.active else { return }
+        let lines = Array(multiStore.segments.compactMap { $0.targets[lang] }.suffix(60))
+        relay.updateLive(lang: lang, current: multiStore.currentTargets[lang] ?? "", lines: lines)
+    }
+    private func relayMultiAll() {
+        guard relay.active else { return }
+        for lang in audienceLangs { relayMulti(lang) }
     }
 
     private func swapLanguages() {
@@ -498,9 +652,12 @@ struct ContentView: View {
 
         client.onConnected = { DispatchQueue.main.async { self.statusMessage = "✅ 연결됨" } }
         client.onInputTranscript = { t in DispatchQueue.main.async { self.subtitles.appendSource(t) } }
-        client.onOutputTranscript = { t in DispatchQueue.main.async { self.subtitles.appendTarget(t) } }
-        client.onAudio = { [audioPlayer] d in audioPlayer.enqueue(pcm16: d) }
-        client.onTurnComplete = { DispatchQueue.main.async { self.subtitles.finalizeTurn() } }
+        client.onOutputTranscript = { t in DispatchQueue.main.async { self.subtitles.appendTarget(t); self.relaySingle() } }
+        client.onAudio = { [audioPlayer] d in
+                    audioPlayer.enqueue(pcm16: d)
+                    self.audioBroadcaster.append(lang: self.settings.targetLang, pcm16: d)
+                }
+        client.onTurnComplete = { DispatchQueue.main.async { self.subtitles.finalizeTurn(); self.relaySingle() } }
         client.onError = { m in DispatchQueue.main.async { self.statusMessage = "❌ \(m)" } }
         client.onClosed = {
             DispatchQueue.main.async { if self.isRunning { self.statusMessage = "연결 종료됨" } }
@@ -515,6 +672,7 @@ struct ContentView: View {
             isRunning = true
             sessionStart = Date()
             if settings.playTranslatedAudio { audioPlayer.start() }
+            beginBroadcastIfNeeded()
         } catch {
             statusMessage = "❌ 마이크 시작 실패: \(error.localizedDescription)"
             client.disconnect()
@@ -526,6 +684,8 @@ struct ContentView: View {
         audio.stop()
         client.disconnect()
         audioPlayer.stop()
+        relay.stopBroadcast()
+        audioBroadcaster.stop()
         isRunning = false
         sessionStart = nil
         statusMessage = "정지됨"
@@ -542,7 +702,7 @@ struct ContentView: View {
         }
 
         // 화자 언어는 타깃에서 제외 (영어 화자인데 영어 청중 같은 빈 세션 방지)
-        let targets = audienceLangs.filter { $0 != settings.sourceLang }
+        let targets = audienceLangs.filter { $0 != settings.multiSourceLang }
         guard !targets.isEmpty else {
             statusMessage = "❌ 화자 언어와 다른 청중 언어를 선택하세요"; return
         }
@@ -555,17 +715,17 @@ struct ContentView: View {
             DispatchQueue.main.async { self.statusMessage = "✅ 다국어 연결됨 (\(self.audienceLangs.count)개)" }
         }
         multiClient.onSource = { t in DispatchQueue.main.async { self.multiStore.appendSource(t) } }
-        multiClient.onTarget = { lang, t in DispatchQueue.main.async { self.multiStore.appendTarget(lang, t) } }
+        multiClient.onTarget = { lang, t in DispatchQueue.main.async { self.multiStore.appendTarget(lang, t); self.relayMulti(lang) } }
         multiClient.onAudio = { [audioPlayer] lang, d in
-            // 선택한 언어의 음성만 재생
-            if lang == self.settings.multiAudioLang { audioPlayer.enqueue(pcm16: d) }
-        }
-        multiClient.onTurnComplete = { DispatchQueue.main.async { self.multiStore.finalizeTurn() } }
+                    if lang == self.settings.multiAudioLang { audioPlayer.enqueue(pcm16: d) }
+                    self.audioBroadcaster.append(lang: lang, pcm16: d)
+                }
+        multiClient.onTurnComplete = { DispatchQueue.main.async { self.multiStore.finalizeTurn(); self.relayMultiAll() } }
         multiClient.onError = { m in DispatchQueue.main.async { self.statusMessage = "❌ \(m)" } }
 
         audio.onAudioData = { [multiClient] d in multiClient.sendAudio(d) }
 
-        multiClient.connect(apiKey: settings.geminiApiKey, sourceLang: settings.sourceLang, targets: targets)
+        multiClient.connect(apiKey: settings.geminiApiKey, sourceLang: settings.multiSourceLang, targets: targets)
 
         do {
             try audio.start()
@@ -573,6 +733,7 @@ struct ContentView: View {
             multiSessionStart = Date()
             if !settings.multiAudioLang.isEmpty { audioPlayer.start() }
             multiOverlay.show(store: multiStore)
+            beginBroadcastIfNeeded()
         } catch {
             statusMessage = "❌ 마이크 시작 실패: \(error.localizedDescription)"
             multiClient.disconnect()
@@ -584,6 +745,8 @@ struct ContentView: View {
         audio.stop()
         multiClient.disconnect()
         audioPlayer.stop()
+        relay.stopBroadcast()
+        audioBroadcaster.stop()
         isMultiRunning = false
         multiSessionStart = nil
         statusMessage = "정지됨"

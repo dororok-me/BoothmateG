@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>실시간 자막 · Live Subtitles</title>
+<!--
+  BoothmateG 청중용 자막 페이지 (sub.html)  v1.3.0
+  ───────────────────────────────────────────────────────────────────────
+  변경:
+    1.1.0 - 언어 선택이 안 뜨던 문제 수정. live 노드에서 실제 송출 언어 발견.
+    1.2.0 - 다국어인데도 선택 메뉴가 숨겨지던 CSS 버그 수정(inline-block).
+    1.3.0 - 음성 듣기(2단계): "음성 듣기" 탭 → 자기 언어의 audioLive/{lang} 클립을
+            켠 시점 이후(seq 기준)부터 순서대로 재생.
+    1.3.1 - 음성 재생을 Web Audio(fetch+decode)에서 <audio> 태그 순차 재생으로 변경.
+            Storage 클립을 CORS 설정 없이 바로 재생(이전엔 fetch가 CORS로 막혀 무음이었음).
+  ─────────────────────────────────────────────
+  · QR 링크 형식:  https://dororokrealtimespeech.web.app/sub.html?s=<세션ID>
+  · 읽는 데이터(Realtime Database) 구조:
+      /sessions/{세션ID}/meta = {
+          eventName, sessionName, logoUrl,
+          mode: "single" | "multi",
+          langs: { "ja": "Japanese (日本語)", "zh-Hans": "Chinese, Simplified (简体)", ... },
+          active: true|false
+      }
+      /sessions/{세션ID}/live/{언어코드} = { current: "진행중 문장", lines: ["확정1","확정2", ...] }
+  · 음성(2단계): 하단 'Audio' 버튼은 지금은 자리만(비활성).
+  ※ databaseURL은 새 인스턴스(dororokrealtimespeech.asia-southeast1)로 지정함.
+-->
+<style>
+  :root{
+    --bg:#faf9f7; --surface:#ffffff; --line:#ececec;
+    --ink:#16181d; --muted:#9aa0a6; --soft:#5b6066;
+    --live:#d64545; --accent:#1f6f6a;
+    --sub:1.9rem;            /* 자막 크기(스크립트로 조절) */
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0; height:100%;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:system-ui,-apple-system,"Apple SD Gothic Neo","Noto Sans KR",
+      "Hiragino Sans","Yu Gothic","Microsoft YaHei",sans-serif;
+    display:flex; flex-direction:column; height:100dvh;
+  }
+
+  /* 상단: 행사 정보 */
+  header{
+    background:var(--surface); border-bottom:1px solid var(--line);
+    padding:10px 16px calc(10px + env(safe-area-inset-top)) 16px;
+    padding-top:max(10px, env(safe-area-inset-top));
+    display:flex; align-items:center; gap:12px; flex:none;
+  }
+  header img.logo{height:34px; width:auto; border-radius:6px; flex:none;}
+  header .titles{min-width:0; line-height:1.25;}
+  header .ev{font-size:.95rem; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  header .se{font-size:.78rem; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  header .live{
+    margin-left:auto; flex:none; display:none; align-items:center; gap:6px;
+    font-size:.72rem; font-weight:700; color:var(--live); letter-spacing:.04em;
+  }
+  header .live.on{display:flex;}
+  header .dot{width:8px; height:8px; border-radius:50%; background:var(--live); animation:pulse 1.6s ease-in-out infinite;}
+  @keyframes pulse{0%,100%{opacity:1;} 50%{opacity:.25;}}
+  @media (prefers-reduced-motion:reduce){ .dot{animation:none;} }
+
+  /* 본문: 자막 */
+  main{
+    flex:1 1 auto; overflow-y:auto; padding:20px 18px 28px;
+    scroll-behavior:smooth;
+  }
+  .lines{
+    font-size:var(--sub); line-height:1.5; font-weight:450;
+    word-break:break-word; max-width:46rem; margin:0 auto;
+  }
+  .lines .fin{color:var(--soft); margin:0 0 .55em;}
+  .lines .cur{color:var(--ink); font-weight:600; margin:0;}
+
+  /* 상태 안내 (대기/빈/오류) */
+  .state{
+    height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    text-align:center; color:var(--muted); gap:10px; padding:24px;
+  }
+  .state .big{font-size:1.05rem; color:var(--soft); font-weight:600; white-space:pre-line;}
+  .state .small{font-size:.85rem; white-space:pre-line;}
+  .state .spin{width:26px; height:26px; border:3px solid var(--line); border-top-color:var(--accent); border-radius:50%; animation:spin 1s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  @media (prefers-reduced-motion:reduce){ .spin{animation:none;} }
+
+  /* 하단: 조작 바 */
+  footer{
+    background:var(--surface); border-top:1px solid var(--line);
+    padding:10px 14px calc(10px + env(safe-area-inset-bottom));
+    padding-bottom:max(10px, env(safe-area-inset-bottom));
+    display:flex; align-items:center; gap:8px; flex:none; flex-wrap:wrap;
+  }
+  footer select, footer button{
+    font:inherit; font-size:.85rem; border:1px solid #dadada; background:#fff; color:var(--ink);
+    border-radius:9px; padding:8px 11px; cursor:pointer; min-height:40px;
+  }
+  footer select{padding-right:8px;}
+  footer button:active{background:#f1f1f1;}
+  footer button:focus-visible, footer select:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
+  footer .size{display:inline-flex; gap:0; overflow:hidden;}
+  footer .size button{border-radius:0; min-width:42px; font-size:1rem; border-right:none;}
+  footer .size button:first-child{border-radius:9px 0 0 9px;}
+  footer .size button:last-child{border-radius:0 9px 9px 0; border-right:1px solid #dadada;}
+  footer .spacer{flex:1 1 auto;}
+  footer button.audio[disabled]{color:var(--muted); cursor:default; background:#f7f7f7;}
+  footer button.audio[disabled]:active{background:#f7f7f7;}
+  footer button.audio.on{background:var(--accent); color:#fff; border-color:var(--accent);}
+  #langSel{display:none;}
+</style>
+</head>
+<body>
+  <header>
+    <img id="logo" class="logo" alt="" style="display:none">
+    <div class="titles">
+      <div class="ev" id="ev">실시간 자막</div>
+      <div class="se" id="se">Live Subtitles</div>
+    </div>
+    <div class="live" id="liveBadge"><span class="dot"></span>LIVE</div>
+  </header>
+
+  <main id="main">
+    <div class="state">
+      <div class="spin"></div>
+      <div class="big">연결 중…</div>
+      <div class="small">Connecting…</div>
+    </div>
+  </main>
+
+  <footer>
+    <select id="langSel" aria-label="Subtitle language"></select>
+    <div class="size">
+      <button id="smaller" aria-label="Smaller text">A−</button>
+      <button id="bigger" aria-label="Bigger text">A+</button>
+    </div>
+    <div class="spacer"></div>
+    <button class="audio" id="audioBtn" title="번역 음성 듣기">🔊 음성 듣기</button>
+    <button id="saveBtn">⬇ Save</button>
+  </footer>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getDatabase, ref, onValue, off, get, query, limitToLast, onChildAdded } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDFJUlehacd5sMAhr5MDkyFIgNXUCjdGAk",
+  authDomain: "dororokrealtimespeech.firebaseapp.com",
+  // ▼ 새 인스턴스(자막용)로 지정 — Firebase가 준 기본값(-default-rtdb)이 아님
+  databaseURL: "https://dororokrealtimespeech.asia-southeast1.firebasedatabase.app",
+  projectId: "dororokrealtimespeech",
+  storageBucket: "dororokrealtimespeech.firebasestorage.app",
+  messagingSenderId: "405462508977",
+  appId: "1:405462508977:web:ae2077321e085332340990"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+const sid = new URLSearchParams(location.search).get("s");
+
+const $ = (id) => document.getElementById(id);
+const mainEl = $("main"), evEl = $("ev"), seEl = $("se"), logoEl = $("logo");
+const liveBadge = $("liveBadge"), langSel = $("langSel");
+const saveBtn = $("saveBtn");
+const audioBtn = $("audioBtn");
+
+let meta = null;
+let currentLang = null;
+let liveRef = null;
+let buf = { lines: [], current: "" };
+
+// ── 음성 재생 상태 ──
+let audioOn = false;
+let audioEl = null;         // <audio> 요소 (CORS 없이 다른 도메인 재생)
+let audioUnsub = null;      // audioLive 구독 해제 함수
+let audioBaseline = 0;      // 켠 시점의 마지막 seq (이보다 큰 클립만 재생)
+let clipQueue = [];         // 받은 클립 URL 대기열 (순서 보존)
+let playing = false;
+const SILENT_WAV = "data:audio/wav;base64,UklGRsQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+// meta.langs에 라벨이 없을 때 쓰는 표시명 폴백
+const FALLBACK_LABEL = {
+  "ko":"한국어 (Korean)", "en":"English (영어)", "ja":"日本語 (Japanese)",
+  "zh-Hans":"简体中文 (Chinese, Simplified)", "zh-Hant":"繁體中文 (Chinese, Traditional)",
+  "es":"Español (Spanish)", "fr":"Français (French)", "de":"Deutsch (German)",
+  "vi":"Tiếng Việt (Vietnamese)", "th":"ไทย (Thai)", "id":"Bahasa Indonesia",
+  "ru":"Русский (Russian)", "ar":"العربية (Arabic)", "pt":"Português (Portuguese)",
+  "it":"Italiano (Italian)", "hi":"हिन्दी (Hindi)", "tr":"Türkçe (Turkish)"
+};
+
+// ── 자막 글자 크기 (기억) ──
+let sub = parseFloat(localStorage.getItem("bmg_sub")) || 1.9;
+applySub();
+function applySub(){ document.documentElement.style.setProperty("--sub", sub + "rem"); }
+$("bigger").onclick = () => { sub = Math.min(sub + 0.2, 3.4); applySub(); localStorage.setItem("bmg_sub", sub); };
+$("smaller").onclick = () => { sub = Math.max(sub - 0.2, 1.1); applySub(); localStorage.setItem("bmg_sub", sub); };
+
+function showState(big, small, spin){
+  mainEl.innerHTML = '<div class="state">' +
+    (spin ? '<div class="spin"></div>' : '') +
+    '<div class="big">'+esc(big)+'</div>' +
+    (small ? '<div class="small">'+esc(small)+'</div>' : '') + '</div>';
+}
+function esc(s){ return (s||"").replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+if (!sid) {
+  showState("이 링크에는 세션 정보가 없습니다.", "This link has no session.\n주최 측에 올바른 QR을 요청하세요.");
+} else {
+  start();
+}
+
+function start(){
+  onValue(ref(db, `sessions/${sid}/meta`), (snap) => {
+    meta = snap.val();
+    if (!meta) {
+      liveBadge.classList.remove("on");
+      showState("세션이 곧 시작됩니다.", "Waiting for the session to start…", true);
+      return;
+    }
+    renderHeader();
+    setupLangs();
+  }, (err) => {
+    showState("연결에 문제가 있습니다.", "Connection error. " + (err && err.message || ""));
+  });
+}
+
+function renderHeader(){
+  evEl.textContent = meta.eventName || "실시간 자막";
+  seEl.textContent = meta.sessionName || "Live Subtitles";
+  if (meta.logoUrl){ logoEl.src = meta.logoUrl; logoEl.style.display = ""; }
+  else { logoEl.style.display = "none"; }
+  liveBadge.classList.toggle("on", meta.active !== false);
+}
+
+async function setupLangs(){
+  // 1) meta.langs의 언어 + 라벨
+  const metaLangs = meta.langs && typeof meta.langs === "object" ? meta.langs : {};
+  let codes = Object.keys(metaLangs);
+
+  // 2) 안전망: 실제 송출 중인 언어를 live 노드에서 직접 발견
+  //    (meta.mode가 잘못 기록됐거나 meta.langs가 비어 있어도 선택이 뜨도록)
+  try {
+    const snap = await get(ref(db, `sessions/${sid}/live`));
+    const liveVal = snap.val();
+    if (liveVal && typeof liveVal === "object") {
+      for (const c of Object.keys(liveVal)) {
+        if (!codes.includes(c)) codes.push(c);
+      }
+    }
+  } catch (e) { /* live 아직 없음 — 무시 */ }
+
+  const labelOf = (c) => metaLangs[c] || FALLBACK_LABEL[c] || c;
+
+  // mode 값과 무관하게: 언어가 2개 이상이면 선택 노출
+  const multi = codes.length > 1;
+
+  if (multi){
+    langSel.style.display = "inline-block";   // ""로 두면 CSS의 #langSel{display:none}이 다시 먹어 숨겨짐
+    langSel.innerHTML = codes.map(c => `<option value="${esc(c)}">${esc(labelOf(c))}</option>`).join("");
+    const saved = localStorage.getItem("bmg_lang_" + sid);
+    currentLang = (saved && codes.includes(saved)) ? saved : codes[0];
+    langSel.value = currentLang;
+    langSel.onchange = () => {
+      currentLang = langSel.value;
+      localStorage.setItem("bmg_lang_" + sid, currentLang);
+      subscribeLive();
+      if (audioOn) subscribeAudio();   // 음성도 새 언어로 (요소는 이미 잠금 해제됨)
+    };
+  } else {
+    langSel.style.display = "none";
+    currentLang = codes[0] || meta.lang || "ko";  // 단일 언어
+  }
+  subscribeLive();
+}
+
+function subscribeLive(){
+  if (liveRef) off(liveRef);
+  buf = { lines: [], current: "" };
+  showState("자막을 기다리는 중…", "Waiting for subtitles…", true);
+
+  liveRef = ref(db, `sessions/${sid}/live/${currentLang}`);
+  onValue(liveRef, (snap) => {
+    const v = snap.val();
+    if (!v){ buf = { lines: [], current: "" }; renderLines(); return; }
+    let lines = v.lines;
+    if (lines && !Array.isArray(lines)) lines = Object.values(lines);  // RTDB가 객체로 줄 때
+    buf.lines = lines || [];
+    buf.current = v.current || "";
+    renderLines();
+  });
+}
+
+function renderLines(){
+  if (!buf.lines.length && !buf.current){
+    showState("자막을 기다리는 중…", "Waiting for subtitles…", true);
+    return;
+  }
+  const finals = buf.lines.map(t => `<p class="fin">${esc(t)}</p>`).join("");
+  const cur = buf.current ? `<p class="cur">${esc(buf.current)}</p>` : "";
+  mainEl.innerHTML = `<div class="lines">${finals}${cur}</div>`;
+  mainEl.scrollTop = mainEl.scrollHeight;  // 항상 최신으로
+}
+
+// ── 음성 듣기 (audio 태그로 직접 재생 — CORS 불필요) ──
+audioBtn.onclick = () => { audioOn ? stopAudio() : enableAudio(); };
+
+function enableAudio(){
+  audioOn = true;
+  audioBtn.classList.add("on");
+  audioBtn.textContent = "🔈 음성 끄기";
+  if (!audioEl){
+    audioEl = new Audio();
+    audioEl.onended = playNext;
+    audioEl.onerror = () => { playing = false; playNext(); };
+  }
+  // iOS 오디오 잠금 해제: 사용자 탭 안에서 '동기적으로' 무음을 한 번 재생
+  try { audioEl.src = SILENT_WAV; audioEl.play().catch(()=>{}); } catch(e){}
+  subscribeAudio();
+}
+
+function stopAudio(){
+  audioOn = false;
+  audioBtn.classList.remove("on");
+  audioBtn.textContent = "🔊 음성 듣기";
+  if (audioUnsub){ try { audioUnsub(); } catch(e){} audioUnsub = null; }
+  clipQueue = [];
+  playing = false;
+  if (audioEl){ try { audioEl.pause(); } catch(e){} }
+}
+
+// 현재 언어의 audioLive 구독 (언어 바뀌면 다시 호출)
+async function subscribeAudio(){
+  if (audioUnsub){ try { audioUnsub(); } catch(e){} audioUnsub = null; }
+  clipQueue = [];
+  const aref = ref(db, `sessions/${sid}/audioLive/${currentLang}`);
+  // 켠 시점의 마지막 seq를 기준선으로 → 그 이후 문장부터 재생 (기기 시계와 무관)
+  audioBaseline = 0;
+  try {
+    const snap = await get(query(aref, limitToLast(1)));
+    snap.forEach(c => { const v = c.val(); if (v && typeof v.seq === "number") audioBaseline = v.seq; });
+  } catch(e){}
+  if (!audioOn) return;
+  audioUnsub = onChildAdded(query(aref, limitToLast(8)), (c) => {
+    if (!audioOn) return;
+    const v = c.val();
+    if (!v || !v.url || typeof v.seq !== "number") return;
+    if (v.seq <= audioBaseline) return;        // 켜기 전 클립은 건너뜀
+    clipQueue.push(v.url);
+    if (!playing) playNext();
+  });
+}
+
+function playNext(){
+  if (!audioOn || !audioEl){ playing = false; return; }
+  if (clipQueue.length > 3) clipQueue = clipQueue.slice(-2);   // 너무 밀리면 최신만
+  if (!clipQueue.length){ playing = false; return; }
+  const url = clipQueue.shift();
+  playing = true;
+  audioEl.src = url;
+  audioEl.play().catch(() => { playing = false; playNext(); });
+}
+
+// ── 자막 저장 ──
+saveBtn.onclick = () => {
+  const all = buf.lines.concat(buf.current ? [buf.current] : []);
+  if (!all.length) return;
+  const head = [meta && meta.eventName, meta && meta.sessionName].filter(Boolean).join(" · ");
+  const text = (head ? head + "\n\n" : "") + all.join("\n");
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "subtitles_" + (meta && meta.sessionName ? meta.sessionName : sid) + ".txt";
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+</script>
+</body>
+</html>

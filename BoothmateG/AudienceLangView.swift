@@ -2,10 +2,11 @@
 //  AudienceLangView.swift
 //  BoothmateG
 //
-//  Version: 1.1.0
+//  Version: 1.2.0
 //  Changelog:
 //    1.0.0 - 최초 작성. 청중 언어(여러 개)를 체크로 고르는 시트.
 //    1.1.0 - 불러올 때 화자 언어/유효하지 않은 코드를 제외 (개수·체크 표시 정확화).
+//    1.2.0 - 화자 기준을 단일 소스 → 다국어 화자(multiSourceLang)로 변경.
 //
 
 import SwiftUI
@@ -75,12 +76,12 @@ struct AudienceLangView: View {
         }
     }
 
-    // 화자 언어는 타겟 후보에서 제외
+    // 다국어 화자 언어는 타겟 후보에서 제외
     private var targetCandidates: [LangOption] {
-        supportedLanguages.filter { $0.id != settings.sourceLang }
+        supportedLanguages.filter { $0.id != settings.multiSourceLang }
     }
 
     private var speakerLabel: String {
-        supportedLanguages.first { $0.id == settings.sourceLang }?.label ?? settings.sourceLang
+        supportedLanguages.first { $0.id == settings.multiSourceLang }?.label ?? settings.multiSourceLang
     }
 }
