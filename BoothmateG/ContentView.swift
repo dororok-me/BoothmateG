@@ -2,11 +2,11 @@
 //  ContentView.swift
 //  BoothmateG
 //
-//  Version: 2.10.1
+//  Version: 2.14.0
 //  Changelog:
-//    2.9.0  - 양방향 자동 (DualTranslateClient)
-//    2.10.0 - 시작/정지 직관화, 자막 리셋, 세션 타이머
-//    2.10.1 - 전체 언어 지원 대응: 예전 언어 코드 자동 정리(migrateLanguageCodes)
+//    2.13.0 - 다국어 모드 중 콘솔에 원문 표시
+//    2.14.0 - 로고 3배 확대 + 메뉴를 로고 오른쪽에 배치.
+//             다국어 줄에 화자(소스) 언어 표시.
 //
 
 import SwiftUI
@@ -15,21 +15,28 @@ import AppKit
 struct ContentView: View {
     @StateObject private var settings = AppSettings()
     @StateObject private var subtitles = SubtitleStore()
+    @StateObject private var multiStore = MultiSubtitleStore()
 
     @State private var audio = AudioEngine()
     @State private var client = DualTranslateClient()
+    @State private var multiClient = MultiTranslateClient()
     @State private var glossary = GlossaryEngine()
+    @State private var audioPlayer = TranslatedAudioPlayer()
 
     @State private var overlayController = OverlayWindowController()
+    @State private var multiOverlay = MultiOverlayController()
 
     @State private var isRunning: Bool = false
+    @State private var isMultiRunning: Bool = false
     @State private var statusMessage: String = "대기 중"
     @State private var showGlossary: Bool = false
     @State private var showSettings: Bool = false
     @State private var showInputSource: Bool = false
+    @State private var showAudienceLangs: Bool = false
 
     @State private var isEditing: Bool = false
     @State private var currentInputName: String = ""
+    @State private var audienceLangs: [String] = []
 
     @State private var sessionStart: Date? = nil
 
@@ -38,23 +45,29 @@ struct ContentView: View {
     @AppStorage("console_night")      private var night: Bool = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 14) {
             headerBar
             Divider()
             controlsRow
+            multiRow
             Divider()
             subtitleScroll
             Divider()
             inputSourceBar
         }
         .padding(20)
-        .frame(minWidth: 700, minHeight: 500)
+        .frame(minWidth: 760, minHeight: 520)
         .background(night ? Color.black : Color.clear)
         .preferredColorScheme(night ? .dark : nil)
         .onAppear {
             glossary.update(items: settings.loadGlossary())
             refreshInputName()
             migrateLanguageCodes()
+            audienceLangs = settings.loadAudienceLangs()
+            multiStore.setLanguages(audienceLangs)
+        }
+        .onChange(of: settings.playTranslatedAudio) { _, on in
+            if on && isRunning { audioPlayer.start() } else { audioPlayer.stop() }
         }
         .sheet(isPresented: $showGlossary) {
             GlossaryView(settings: settings) { items in
@@ -67,20 +80,26 @@ struct ContentView: View {
         .sheet(isPresented: $showInputSource) {
             InputSourceView { dev in
                 currentInputName = dev.name
-                if isRunning { restartAudio() }
+                if isRunning || isMultiRunning { restartAudio() }
+            }
+        }
+        .sheet(isPresented: $showAudienceLangs) {
+            AudienceLangView(settings: settings) { langs in
+                audienceLangs = langs
+                multiStore.setLanguages(langs)
             }
         }
     }
 
-    // ── 헤더 ──
+    // ── 헤더: 큰 로고 + 그 오른쪽에 메뉴 ──
     private var headerBar: some View {
-        HStack {
+        HStack(spacing: 16) {
             Image("BoothmateG_logo_512")
                 .resizable()
                 .scaledToFit()
-                .frame(height: 28)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-            Spacer()
+                .frame(height: 84)
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+
             Button {
                 overlayController.toggle(store: subtitles, glossary: glossary, mainWindow: NSApp.keyWindow)
             } label: {
@@ -94,11 +113,14 @@ struct ContentView: View {
             Button { showSettings = true } label: {
                 Image(systemName: "gearshape"); Text("설정")
             }
+
+            Spacer()
+
             Text(statusMessage).font(.caption).foregroundStyle(.secondary)
         }
     }
 
-    // ── 입력 줄 ──
+    // ── 양방향(2개 언어) 줄 ──
     private var controlsRow: some View {
         HStack(spacing: 12) {
             langPicker($settings.sourceLang)
@@ -124,6 +146,7 @@ struct ContentView: View {
             .keyboardShortcut(.return, modifiers: [])
             .buttonStyle(.borderedProminent)
             .tint(isRunning ? .red : .green)
+            .disabled(isMultiRunning)
 
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 let e = sessionStart.map { max(0, context.date.timeIntervalSince($0)) } ?? 0
@@ -147,6 +170,63 @@ struct ContentView: View {
         }
     }
 
+    // ── 다국어(1→N) 줄 ──
+    private var multiRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "globe").foregroundStyle(.secondary)
+            Text("다국어").font(.caption).foregroundStyle(.secondary)
+
+            Text("화자: \(sourceLabel)")
+                .font(.caption)
+                .foregroundStyle(.blue)
+
+            Button {
+                showAudienceLangs = true
+            } label: {
+                Text(audienceLangs.isEmpty ? "청중 언어 선택" : "청중: \(audienceTagList)")
+                    .font(.caption)
+                    .lineLimit(1)
+            }
+            .disabled(isRunning || isMultiRunning)
+
+            Button {
+                if isMultiRunning { stopMulti() } else { startMulti() }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: isMultiRunning ? "stop.fill" : "play.fill")
+                    Text(isMultiRunning ? "다국어 정지" : "다국어 시작")
+                }
+            }
+            .buttonStyle(.bordered)
+            .tint(isMultiRunning ? .red : .blue)
+            .disabled(audienceLangs.isEmpty || isRunning)
+
+            Button {
+                if multiStore.langs.isEmpty { multiStore.setLanguages(audienceLangs) }
+                multiOverlay.toggle(store: multiStore)
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: multiOverlay.isVisible
+                          ? "rectangle.on.rectangle.fill" : "rectangle.on.rectangle")
+                    Text("다국어 오버레이").font(.caption)
+                }
+            }
+            .buttonStyle(.bordered)
+
+            Spacer()
+        }
+    }
+
+    private var sourceLabel: String {
+        supportedLanguages.first { $0.id == settings.sourceLang }?.label ?? settings.sourceLang
+    }
+
+    private var audienceTagList: String {
+        audienceLangs.map { code in
+            supportedLanguages.first { $0.id == code }.map { String($0.label.prefix(6)) } ?? code
+        }.joined(separator: ", ")
+    }
+
     private func langPicker(_ selection: Binding<String>) -> some View {
         Picker("", selection: selection) {
             ForEach(supportedLanguages) { lang in
@@ -155,17 +235,58 @@ struct ContentView: View {
         }
         .labelsHidden()
         .frame(width: 150)
-        .disabled(isRunning)
+        .disabled(isRunning || isMultiRunning)
     }
 
-    // HH:MM:SS
     private func formatElapsed(_ t: TimeInterval) -> String {
         let total = Int(t)
         return String(format: "%02d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60)
     }
 
-    // ── 자막 목록 ──
+    // ── 콘솔 자막 영역 ──
+    @ViewBuilder
     private var subtitleScroll: some View {
+        if isMultiRunning {
+            multiSourceScroll
+        } else {
+            pairScroll
+        }
+    }
+
+    private var multiSourceScroll: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    ForEach(multiStore.segments) { seg in
+                        Text(seg.source)
+                            .font(.system(size: CGFloat(targetFont)))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
+                            .background(Color.blue.opacity(0.06))
+                            .cornerRadius(6)
+                    }
+                    if !multiStore.currentSource.isEmpty {
+                        Text(multiStore.currentSource)
+                            .font(.system(size: CGFloat(targetFont)))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
+                            .background(Color.gray.opacity(0.08))
+                            .cornerRadius(6)
+                            .id("msrc")
+                    }
+                }
+                .padding(.vertical, 8)
+            }
+            .onChange(of: multiStore.currentSource) { _, _ in proxy.scrollTo("msrc", anchor: .bottom) }
+            .onChange(of: multiStore.segments.count) { _, _ in
+                withAnimation { proxy.scrollTo("msrc", anchor: .bottom) }
+            }
+        }
+        .frame(minHeight: 260)
+    }
+
+    private var pairScroll: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
@@ -183,7 +304,7 @@ struct ContentView: View {
                 if !isEditing { proxy.scrollTo("current", anchor: .bottom) }
             }
         }
-        .frame(minHeight: 280)
+        .frame(minHeight: 260)
     }
 
     @ViewBuilder
@@ -245,7 +366,6 @@ struct ContentView: View {
         }
     }
 
-    // 예전 코드("ko-KR" 등)가 새 목록에 없으면 기본값으로 정리
     private func migrateLanguageCodes() {
         let ids = Set(supportedLanguages.map { $0.id })
         if !ids.contains(settings.sourceLang) { settings.sourceLang = "ko" }
@@ -266,10 +386,9 @@ struct ContentView: View {
         }
     }
 
-    // ───────────────────────────────────────────────
-    // 시작 (양방향 듀얼 세션)
-    // ───────────────────────────────────────────────
+    // ── 양방향 시작/정지 ──
     private func start() {
+        if isMultiRunning { stopMulti() }
         guard !settings.geminiApiKey.isEmpty else {
             statusMessage = "❌ 설정에서 API 키를 입력하세요"
             return
@@ -285,6 +404,9 @@ struct ContentView: View {
         }
         client.onOutputTranscript = { text in
             DispatchQueue.main.async { self.subtitles.appendTarget(text) }
+        }
+        client.onAudio = { [audioPlayer] data in
+            audioPlayer.enqueue(pcm16: data)
         }
         client.onTurnComplete = {
             DispatchQueue.main.async { self.subtitles.finalizeTurn() }
@@ -312,6 +434,7 @@ struct ContentView: View {
             try audio.start()
             isRunning = true
             sessionStart = Date()
+            if settings.playTranslatedAudio { audioPlayer.start() }
         } catch {
             statusMessage = "❌ 마이크 시작 실패: \(error.localizedDescription)"
             client.disconnect()
@@ -321,14 +444,73 @@ struct ContentView: View {
     private func stop() {
         audio.stop()
         client.disconnect()
+        audioPlayer.stop()
         isRunning = false
+        sessionStart = nil
+        statusMessage = "정지됨"
+    }
+
+    // ── 다국어 시작/정지 ──
+    private func startMulti() {
+        if isRunning { stop() }
+        guard !settings.geminiApiKey.isEmpty else {
+            statusMessage = "❌ 설정에서 API 키를 입력하세요"
+            return
+        }
+        guard !audienceLangs.isEmpty else {
+            statusMessage = "❌ 청중 언어를 먼저 선택하세요"
+            return
+        }
+
+        multiStore.setLanguages(audienceLangs)
+        statusMessage = "다국어 연결 중..."
+
+        multiClient.onConnected = {
+            DispatchQueue.main.async { self.statusMessage = "✅ 다국어 연결됨 (\(self.audienceLangs.count)개 언어)" }
+        }
+        multiClient.onSource = { text in
+            DispatchQueue.main.async { self.multiStore.appendSource(text) }
+        }
+        multiClient.onTarget = { lang, text in
+            DispatchQueue.main.async { self.multiStore.appendTarget(lang, text) }
+        }
+        multiClient.onTurnComplete = {
+            DispatchQueue.main.async { self.multiStore.finalizeTurn() }
+        }
+        multiClient.onError = { msg in
+            DispatchQueue.main.async { self.statusMessage = "❌ \(msg)" }
+        }
+
+        audio.onAudioData = { [multiClient] data in
+            multiClient.sendAudio(data)
+        }
+
+        multiClient.connect(
+            apiKey: settings.geminiApiKey,
+            sourceLang: settings.sourceLang,
+            targets: audienceLangs
+        )
+
+        do {
+            try audio.start()
+            isMultiRunning = true
+            sessionStart = Date()
+            multiOverlay.show(store: multiStore)
+        } catch {
+            statusMessage = "❌ 마이크 시작 실패: \(error.localizedDescription)"
+            multiClient.disconnect()
+        }
+    }
+
+    private func stopMulti() {
+        audio.stop()
+        multiClient.disconnect()
+        isMultiRunning = false
         sessionStart = nil
         statusMessage = "정지됨"
     }
 }
 
-// ─────────────────────────────────────────────────
-// 한 segment(문장 한 쌍) — 단어 더블클릭 수정
 // ─────────────────────────────────────────────────
 struct SegmentRow: View {
     let segment: SubtitleSegment

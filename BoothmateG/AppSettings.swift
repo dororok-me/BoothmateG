@@ -2,12 +2,11 @@
 //  AppSettings.swift
 //  BoothmateG
 //
-//  Version: 1.2.0
+//  Version: 1.3.0
 //  Changelog:
-//    1.0.0 - 최초 작성. API 키, 언어쌍, 용어집 저장 관리
-//    1.1.0 - 용어집을 CSV 호환 구조(GlossaryItem 배열)로 변경
-//    1.2.0 - 지원 언어 전체(70여 개) 추가. 언어 코드를 BCP-47(ko, en, zh-Hans...)로 변경.
-//            기본값 sourceLang="ko", targetLang="en"
+//    1.1.0 - 용어집 CSV 호환 구조
+//    1.2.0 - 지원 언어 전체 + BCP-47 코드
+//    1.3.0 - 청중 언어(다국어 모드 타겟들) 저장 추가
 //
 
 import SwiftUI
@@ -17,13 +16,15 @@ final class AppSettings: ObservableObject {
 
     @AppStorage("geminiApiKey") var geminiApiKey: String = ""
 
-    // 언어 코드는 BCP-47 (Gemini Live Translate가 받는 형식)
     @AppStorage("sourceLang") var sourceLang: String = "ko"
     @AppStorage("targetLang") var targetLang: String = "en"
 
     @AppStorage("playTranslatedAudio") var playTranslatedAudio: Bool = false
 
     @AppStorage("glossaryJSON") var glossaryJSON: String = "[]"
+
+    // 다국어 모드: 청중 언어 목록 (기본: 영어/중국어 간체/일본어)
+    @AppStorage("audienceLangsJSON") var audienceLangsJSON: String = "[\"en\",\"zh-Hans\",\"ja\"]"
 
     func loadGlossary() -> [GlossaryItem] {
         guard let data = glossaryJSON.data(using: .utf8),
@@ -38,16 +39,27 @@ final class AppSettings: ObservableObject {
         else { return }
         glossaryJSON = str
     }
+
+    func loadAudienceLangs() -> [String] {
+        guard let data = audienceLangsJSON.data(using: .utf8),
+              let arr = try? JSONDecoder().decode([String].self, from: data)
+        else { return [] }
+        return arr
+    }
+
+    func saveAudienceLangs(_ langs: [String]) {
+        guard let data = try? JSONEncoder().encode(langs),
+              let str = String(data: data, encoding: .utf8)
+        else { return }
+        audienceLangsJSON = str
+    }
 }
 
-// 드롭다운용 언어 항목
 struct LangOption: Identifiable, Hashable {
-    let id: String      // BCP-47 코드 (예: "ko", "en", "zh-Hans")
+    let id: String
     let label: String
 }
 
-// Gemini Live Translate 지원 언어 전체 (70여 개)
-// 자주 쓰는 언어를 위로, 나머지는 알파벳 순
 let supportedLanguages: [LangOption] = [
     LangOption(id: "ko",      label: "Korean (한국어)"),
     LangOption(id: "en",      label: "English"),
@@ -130,7 +142,6 @@ let supportedLanguages: [LangOption] = [
     LangOption(id: "zu",  label: "Zulu"),
 ]
 
-// 용어집 한 항목
 struct GlossaryItem: Identifiable, Codable, Hashable {
     var id = UUID()
     var source: String

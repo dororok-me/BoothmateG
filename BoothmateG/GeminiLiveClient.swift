@@ -2,23 +2,23 @@
 //  GeminiLiveClient.swift
 //  BoothmateG
 //
-//  Version: 1.1.0
+//  Version: 1.2.0
 //  Changelog:
 //    1.0.0 - 최초 작성. Gemini 3.5 Live Translate WebSocket 클라이언트
-//    1.1.0 - 양방향 듀얼 세션 지원용:
-//            · setup에 echoTargetLanguage: false 추가 (입력이 타겟 언어면 출력 침묵)
-//            · 입력 자막의 감지 언어코드(languageCode)를 onInputLanguage로 전달
+//    1.1.0 - echoTargetLanguage:false + 입력 감지 언어(onInputLanguage)
+//    1.2.0 - 번역 음성 지원: 언어코드 그대로 전송(BCP-47),
+//            modelTurn 오디오(inlineData) 파싱 → onAudio 콜백
 //
 
 import Foundation
 
-// Gemini Live Translate 서버와 WebSocket으로 통신하는 클라이언트.
 final class GeminiLiveClient: NSObject {
 
     // 콜백들
-    var onInputTranscript: ((String) -> Void)?    // 원문 자막
-    var onInputLanguage: ((String) -> Void)?      // 감지된 입력 언어코드 (예: "ko","en")
-    var onOutputTranscript: ((String) -> Void)?   // 번역 자막
+    var onInputTranscript: ((String) -> Void)?
+    var onInputLanguage: ((String) -> Void)?
+    var onOutputTranscript: ((String) -> Void)?
+    var onAudio: ((Data) -> Void)?              // 번역 음성 PCM (24kHz, 16-bit, mono)
     var onError: ((String) -> Void)?
     var onConnected: (() -> Void)?
     var onClosed: (() -> Void)?
@@ -79,13 +79,8 @@ final class GeminiLiveClient: NSObject {
         }
     }
 
-    // ───────────────────────────────────────────────
-    // setup 메시지 (v1.1.0: echoTargetLanguage: false)
-    //   - targetLanguageCode: 짧은 코드(en-US → en)
-    //   - echoTargetLanguage:false → 입력이 이미 타겟 언어면 출력 침묵
-    // ───────────────────────────────────────────────
+    // setup: 언어코드(BCP-47)를 그대로 사용
     private func sendSetup(sourceLang: String, targetLang: String) {
-        // 언어 코드(BCP-47)를 그대로 사용 (예: "ko","en","zh-Hans","pt-BR")
         let setup: [String: Any] = [
             "setup": [
                 "model": "models/\(model)",
@@ -96,7 +91,6 @@ final class GeminiLiveClient: NSObject {
                         "echoTargetLanguage": false
                     ]
                 ],
-
                 "inputAudioTranscription": [:],
                 "outputAudioTranscription": [:]
             ]
@@ -115,9 +109,6 @@ final class GeminiLiveClient: NSObject {
         }
     }
 
-    // ───────────────────────────────────────────────
-    // 수신 루프
-    // ───────────────────────────────────────────────
     private func receiveLoop() {
         webSocket?.receive { [weak self] result in
             guard let self = self else { return }
@@ -180,13 +171,24 @@ final class GeminiLiveClient: NSObject {
             onOutputTranscript?(textVal)
         }
 
+        // 번역 음성 (modelTurn.parts[].inlineData.data, base64 PCM)
+        if let modelTurn = serverContent["modelTurn"] as? [String: Any],
+           let parts = modelTurn["parts"] as? [[String: Any]] {
+            for part in parts {
+                if let inline = part["inlineData"] as? [String: Any],
+                   let b64 = inline["data"] as? String,
+                   let audio = Data(base64Encoded: b64) {
+                    onAudio?(audio)
+                }
+            }
+        }
+
         if serverContent["turnComplete"] as? Bool == true {
             onTurnComplete?()
         }
     }
 }
 
-// URLSession 델리게이트
 extension GeminiLiveClient: URLSessionWebSocketDelegate {
     func urlSession(_ session: URLSession,
                     webSocketTask: URLSessionWebSocketTask,

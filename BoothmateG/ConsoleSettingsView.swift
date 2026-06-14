@@ -64,6 +64,15 @@ struct ConsoleSettingsView: View {
             }
             .toggleStyle(.switch)
 
+            // ── 번역 음성 재생 ──
+            Toggle(isOn: $settings.playTranslatedAudio) {
+                HStack(spacing: 6) {
+                    Image(systemName: "speaker.wave.2.fill")
+                    Text("번역 음성 재생")
+                }
+            }
+            .toggleStyle(.switch)
+
             // ── 미리보기 ──
             VStack(alignment: .leading, spacing: 4) {
                 Text("미리보기").font(.caption).foregroundStyle(.secondary)
