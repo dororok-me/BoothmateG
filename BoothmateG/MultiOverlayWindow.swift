@@ -2,11 +2,10 @@
 //  MultiOverlayWindow.swift
 //  BoothmateG
 //
-//  Version: 6.1.0
+//  Version: 6.2.0
 //  Changelog:
-//    6.0.0 - 버튼식 굵기/색, 상단 닫기 버튼
-//    6.1.0 - 상단 회색(제목표시줄 비침) 제거: 카드가 맨 위까지 채우고
-//            기어/닫기는 카드 위에 떠있게. 제목표시줄 구분선 제거.
+//    6.1.0 - 상단 회색 제거
+//    6.2.0 - 옵션 패널을 상단 끝에 붙여 톱니/X를 가리게. 옵션 패널에 자체 닫기(X).
 //
 
 import SwiftUI
@@ -87,7 +86,6 @@ struct MultiOverlayView: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            // 카드들이 맨 위까지 채움 (회색 띠 방지)
             VStack(spacing: 8) {
                 ForEach(store.langs, id: \.self) { lang in
                     section(lang)
@@ -95,7 +93,7 @@ struct MultiOverlayView: View {
             }
             .padding(8)
 
-            // 카드 위에 떠 있는 기어 + 닫기
+            // 톱니 + 닫기 (옵션 열리면 패널이 이 위를 덮음)
             HStack(spacing: 8) {
                 Button { showOptions.toggle() } label: {
                     Image(systemName: "gearshape.fill")
@@ -118,7 +116,12 @@ struct MultiOverlayView: View {
             .padding(.top, 12)
             .padding(.trailing, 16)
 
-            if showOptions { optionsPanel.padding(.top, 48).padding(.trailing, 12) }
+            // 옵션 패널: 상단 끝에 붙여 톱니/X를 가림
+            if showOptions {
+                optionsPanel
+                    .padding(.top, 8)
+                    .padding(.trailing, 8)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
@@ -168,7 +171,18 @@ struct MultiOverlayView: View {
 
     private var optionsPanel: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("오버레이 옵션").font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
+            HStack {
+                Text("오버레이 옵션").font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
+                Spacer()
+                Button { showOptions = false } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .padding(5)
+                        .background(Circle().fill(Color.white.opacity(0.18)))
+                }
+                .buttonStyle(.plain)
+            }
 
             sliderRow("글자 크기", value: $fontSize, range: 16...56, percent: false)
             sliderRow("배경 투명도", value: $bgOpacity, range: 0.2...1.0, percent: true)
@@ -212,15 +226,10 @@ struct MultiOverlayView: View {
                     Spacer()
                 }
             }
-
-            HStack {
-                Spacer()
-                Button("옵션 닫기") { showOptions = false }.buttonStyle(.borderedProminent)
-            }
         }
         .padding(16)
         .frame(width: 300)
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color.black.opacity(0.94)))
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color.black.opacity(0.96)))
     }
 
     private func sliderRow(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, percent: Bool) -> some View {
