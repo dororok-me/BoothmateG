@@ -2,11 +2,12 @@
 //  AppSettings.swift
 //  BoothmateG
 //
-//  Version: 1.3.0
+//  Version: 1.4.0
 //  Changelog:
 //    1.1.0 - 용어집 CSV 호환 구조
 //    1.2.0 - 지원 언어 전체 + BCP-47 코드
 //    1.3.0 - 청중 언어(다국어 모드 타겟들) 저장 추가
+//    1.4.0 - 다국어 모드에서 음성 재생할 언어 1개 저장(multiAudioLang) 추가
 //
 
 import SwiftUI
@@ -20,6 +21,9 @@ final class AppSettings: ObservableObject {
     @AppStorage("targetLang") var targetLang: String = "en"
 
     @AppStorage("playTranslatedAudio") var playTranslatedAudio: Bool = false
+
+    // 다국어 모드에서 음성으로 재생할 언어 1개 (빈 값 = 끄기)
+    @AppStorage("multiAudioLang") var multiAudioLang: String = ""
 
     @AppStorage("glossaryJSON") var glossaryJSON: String = "[]"
 

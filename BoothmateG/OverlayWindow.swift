@@ -2,8 +2,11 @@
 //  OverlayWindow.swift
 //  BoothmateG
 //
-//  Version: 1.5.0
+//  Version: 1.7.0
 //  Changelog:
+//    1.6.0 - 설정 패널이 열려 있을 때 패널 바깥을 클릭하면 닫히고
+//            전체 자막 화면으로 돌아가도록 처리 (바깥 클릭 닫기 레이어 추가).
+//    1.7.0 - 창 어디든 더블클릭하면 화면 전체로 확대(다시 더블클릭하면 원래 크기 복원).
 //    1.0.0 - 최초 작성. 텔레프롬프터 오버레이 창
 //    1.1.0 - 설정 패널 클릭 가능 hitTest, OBS 경계선, 스크롤 방향
 //    1.2.0 - OBS 투명 모드 드래그 가능 (0.001 불투명 배경)
@@ -101,14 +104,12 @@ final class OverlayWindowController {
             let handle = OverlayResizeHandle()
             // 통과 영역: 우상단 버튼(80×50) + 설정 열렸을 때 우측 패널(약 340pt)
             handle.shouldPassThrough = { [weak self] p, bounds in
+                // 설정 패널이 열려 있으면 창 전체를 SwiftUI로 통과시킨다.
+                // (패널 바깥 아무 곳이나 클릭하면 SwiftUI의 '닫기 레이어'가 받아 패널을 닫음)
+                if self?.uiState.settingsOpen == true { return true }
                 // 우상단 버튼 영역
                 let btnArea = NSRect(x: bounds.width - 80, y: bounds.height - 50, width: 80, height: 50)
                 if btnArea.contains(p) { return true }
-                // 설정 패널 (우측, 열렸을 때만)
-                if self?.uiState.settingsOpen == true {
-                    let panelArea = NSRect(x: bounds.width - 340, y: 0, width: 340, height: bounds.height)
-                    if panelArea.contains(p) { return true }
-                }
                 return false
             }
             handle.translatesAutoresizingMaskIntoConstraints = false
@@ -146,6 +147,7 @@ class OverlayResizeHandle: NSView {
     private var initialFrame: NSRect = .zero
     private var isDragging = false
     private var dragOffset: NSPoint = .zero
+    private var savedFrame: NSRect? = nil   // 전체 보기 전 원래 크기
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -179,6 +181,12 @@ class OverlayResizeHandle: NSView {
 
     override func mouseDown(with event: NSEvent) {
         guard let win = self.window else { return }
+        // 더블클릭(어디든) → 전체 보기 토글
+        if event.clickCount == 2 {
+            toggleFullView()
+            currentEdge = .none; isDragging = false
+            return
+        }
         let local = convert(event.locationInWindow, from: nil)
         let e = edge(at: local)
         if e != .none {
@@ -187,6 +195,19 @@ class OverlayResizeHandle: NSView {
             currentEdge = .none; isDragging = true
             let sm = NSEvent.mouseLocation
             dragOffset = NSPoint(x: sm.x - win.frame.origin.x, y: sm.y - win.frame.origin.y)
+        }
+    }
+
+    // 화면 전체로 확대 ↔ 원래 크기 복원
+    private func toggleFullView() {
+        guard let win = self.window,
+              let screen = win.screen ?? NSScreen.main else { return }
+        if let saved = savedFrame {
+            win.setFrame(saved, display: true, animate: true)
+            savedFrame = nil
+        } else {
+            savedFrame = win.frame
+            win.setFrame(screen.visibleFrame, display: true, animate: true)
         }
     }
 
@@ -320,6 +341,14 @@ struct OverlayContentView: View {
                 Spacer()
             }
             .allowsHitTesting(false)
+
+            // ── 설정 열렸을 때: 패널 바깥 클릭 → 패널 닫고 전체 자막 화면으로 ──
+            if uiState.settingsOpen {
+                Color.black.opacity(0.001)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { uiState.settingsOpen = false }
+            }
 
             // ── 컨트롤 버튼 (우상단) ──
             HStack(spacing: 6) {

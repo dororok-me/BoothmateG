@@ -2,13 +2,14 @@
 //  MultiSubtitleStore.swift
 //  BoothmateG
 //
-//  Version: 1.0.0
+//  Version: 1.1.0
 //  Changelog:
 //    1.0.0 - 최초 작성. 화자 원문 + 여러 언어 번역을 함께 보관.
+//    1.1.0 - 번역 진행 줄 맨 앞 공백 제거 (한 칸 들여쓰기처럼 보이는 현상 방지)
 //
 
 import SwiftUI
-import Combine 
+import Combine
 
 struct MultiSegment: Identifiable {
     let id = UUID()
@@ -34,7 +35,10 @@ final class MultiSubtitleStore: ObservableObject {
 
     func appendTarget(_ lang: String, _ text: String) {
         let prev = currentTargets[lang] ?? ""
-        currentTargets[lang] = prev + (prev.isEmpty ? "" : " ") + text
+        var joined = prev + (prev.isEmpty ? "" : " ") + text
+        // 번역문 맨 앞 공백 제거 (한 칸 들여쓰기처럼 보이는 현상 방지)
+        if joined.first == " " { joined = String(joined.drop { $0 == " " }) }
+        currentTargets[lang] = joined
     }
 
     func finalizeTurn() {

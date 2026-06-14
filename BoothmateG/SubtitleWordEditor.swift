@@ -2,16 +2,25 @@
 //  SubtitleWordEditor.swift
 //  BoothmateG
 //
-//  Version: 1.0.0
+//  Version: 1.3.0
 //  Changelog:
 //    1.0.0 - 최초 작성.
 //            - FlowLayout: 단어를 줄바꿈하며 배치하는 흐름 레이아웃
 //            - EditableSubtitleText: 단어 더블클릭 → 그 단어가 전체선택된 수정 팝오버
 //            - AutoSelectTextField: 나타나는 즉시 텍스트가 블록 선택되는 NSTextField
+//    1.1.0 - 단어 더블클릭 시 문장 전체를 띄우고, 더블클릭한 단어만 블록 선택된 상태로 시작.
+//            (여러 단어를 한 번에 수정 가능. 확정 시 문장 전체를 새 라인으로 반영.)
+//    1.2.0 - 수정창을 여러 줄(NSTextView)로 교체해 긴 문장도 줄바꿈되어 전체가 보이도록.
+//            선택된 단어를 가능하면 세로 가운데로 스크롤.
+//    1.2.1 - 컴파일 오류 수정: maxSize의 greatestFiniteMagnitude를 CGFloat로 명시.
+//    1.3.0 - 수정창에 현재 입력(한/영) 배지 추가: 한글이면 "가", 영문이면 "A".
+//    1.3.1 - Combine import 추가 (ObservableObject/@Published 컴파일 오류 수정).
 //
 
 import SwiftUI
 import AppKit
+import Combine  // ObservableObject / @Published
+import Carbon   // 현재 키보드 입력 소스(한/영) 감지용
 
 // MARK: - 단어 흐름 레이아웃 (자동 줄바꿈)
 
@@ -69,10 +78,20 @@ struct EditableSubtitleText: View {
 
     @State private var editingIndex: Int? = nil
     @State private var draft: String = ""
+    @State private var selectRange: NSRange? = nil   // 처음 띄울 때 블록 선택할 범위
 
     // 공백 기준 단어 분리
     private var tokens: [String] {
         text.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+    }
+
+    // 문장 전체에서 idx번째 단어가 차지하는 글자 범위(UTF-16)
+    private func wordRange(_ idx: Int) -> NSRange {
+        let t = tokens
+        guard idx < t.count else { return NSRange(location: 0, length: 0) }
+        let before = t[0..<idx].joined(separator: " ")
+        let location = before.isEmpty ? 0 : (before.utf16.count + 1)  // +1 = 단어 앞 공백
+        return NSRange(location: location, length: t[idx].utf16.count)
     }
 
     var body: some View {
@@ -83,22 +102,27 @@ struct EditableSubtitleText: View {
                     .foregroundStyle(color)
                     .padding(.horizontal, 1)
                     .contentShape(Rectangle())
-                    .onTapGesture(count: 2) {     // 더블클릭 → 그 단어 수정
-                        draft = word
+                    .onTapGesture(count: 2) {     // 더블클릭 → 문장 전체 + 그 단어 블록 선택
+                        draft = tokens.joined(separator: " ")
+                        selectRange = wordRange(idx)
                         editingIndex = idx
                     }
                     .popover(isPresented: Binding(
                         get: { editingIndex == idx },
                         set: { if !$0 { editingIndex = nil } }
                     )) {
-                        AutoSelectTextField(
-                            text: $draft,
-                            fontSize: fontSize,
-                            bold: bold,
-                            onCommit: { commit(idx) },
-                            onCancel: { editingIndex = nil }
-                        )
-                        .frame(minWidth: 160)
+                        VStack(alignment: .trailing, spacing: 6) {
+                            InputLanguageBadge()
+                            AutoSelectTextField(
+                                text: $draft,
+                                fontSize: fontSize,
+                                bold: bold,
+                                selectRange: selectRange,
+                                onCommit: { commit() },
+                                onCancel: { editingIndex = nil }
+                            )
+                            .frame(width: 420, height: 120)
+                        }
                         .padding(10)
                     }
             }
@@ -109,66 +133,92 @@ struct EditableSubtitleText: View {
         }
     }
 
-    // 단어 교체 후 라인 전체를 다시 합쳐 콜백
-    private func commit(_ idx: Int) {
-        var t = tokens
-        guard idx < t.count else { editingIndex = nil; return }
+    // 문장 전체를 새 라인으로 반영
+    private func commit() {
         let trimmed = draft.trimmingCharacters(in: .whitespaces)
-        if trimmed.isEmpty {
-            t.remove(at: idx)            // 비우면 그 단어 삭제
-        } else {
-            t[idx] = trimmed             // "두 단어"처럼 공백 포함 입력도 그대로 반영
-        }
-        onCommit(t.joined(separator: " "))
+        onCommit(trimmed)
         editingIndex = nil
     }
 }
 
-// MARK: - 나타나는 즉시 전체 선택되는 NSTextField
+// MARK: - 문장 전체를 보여주고, 더블클릭한 단어를 블록 선택한 채로 띄우는 편집기
+// (여러 줄로 줄바꿈되어 문장 전체가 보이고, 선택된 단어가 가능한 한 세로 가운데로 옴)
 
 struct AutoSelectTextField: NSViewRepresentable {
     @Binding var text: String
     var fontSize: CGFloat
     var bold: Bool
+    var selectRange: NSRange? = nil      // 처음 띄울 때 블록 선택할 범위 (없으면 전체 선택)
     var onCommit: () -> Void
     var onCancel: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
-    func makeNSView(context: Context) -> NSTextField {
-        let tf = NSTextField(string: text)
-        tf.delegate = context.coordinator
-        tf.font = .systemFont(ofSize: fontSize, weight: bold ? .medium : .regular)
-        tf.isBezeled = true
-        tf.bezelStyle = .roundedBezel
-        tf.lineBreakMode = .byClipping
-        tf.usesSingleLineMode = true
-        return tf
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.autohidesScrollers = true
+        scroll.borderType = .bezelBorder
+        scroll.drawsBackground = false
+
+        let tv = NSTextView()
+        tv.delegate = context.coordinator
+        tv.font = .systemFont(ofSize: fontSize, weight: bold ? .medium : .regular)
+        tv.isRichText = false
+        tv.isEditable = true
+        tv.isSelectable = true
+        tv.allowsUndo = true
+        tv.drawsBackground = false
+        tv.textContainerInset = NSSize(width: 6, height: 8)
+        tv.isVerticallyResizable = true
+        tv.isHorizontallyResizable = false
+        tv.autoresizingMask = [.width]
+        tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        tv.textContainer?.widthTracksTextView = true   // 뷰 폭에 맞춰 자동 줄바꿈
+        tv.string = text
+
+        scroll.documentView = tv
+        context.coordinator.textView = tv
+        return scroll
     }
 
-    func updateNSView(_ nsView: NSTextField, context: Context) {
-        if nsView.stringValue != text { nsView.stringValue = text }
-        // 창에 올라온 직후 한 번만: 첫 응답자 지정 + 전체 선택(블록)
-        if !context.coordinator.didFocus, nsView.window != nil {
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        guard let tv = context.coordinator.textView else { return }
+        if tv.string != text { tv.string = text }
+
+        // 창에 올라온 직후 한 번만: 첫 응답자 지정 + 지정 범위(또는 전체) 블록 선택 + 가운데로 스크롤
+        if !context.coordinator.didFocus, tv.window != nil {
             context.coordinator.didFocus = true
+            let wanted = selectRange
             DispatchQueue.main.async {
-                nsView.window?.makeFirstResponder(nsView)
-                nsView.currentEditor()?.selectAll(nil)
+                tv.window?.makeFirstResponder(tv)
+                let len = (tv.string as NSString).length
+                if let r = wanted {
+                    let loc = min(max(0, r.location), len)
+                    let length = min(r.length, max(0, len - loc))
+                    let safe = NSRange(location: loc, length: length)
+                    tv.setSelectedRange(safe)
+                    tv.scrollRangeToVisible(safe)
+                    context.coordinator.center(safe, in: tv)
+                } else {
+                    tv.setSelectedRange(NSRange(location: 0, length: len))
+                }
             }
         }
     }
 
-    final class Coordinator: NSObject, NSTextFieldDelegate {
+    final class Coordinator: NSObject, NSTextViewDelegate {
         let parent: AutoSelectTextField
+        weak var textView: NSTextView?
         var didFocus = false
         init(_ p: AutoSelectTextField) { parent = p }
 
-        func controlTextDidChange(_ obj: Notification) {
-            if let tf = obj.object as? NSTextField { parent.text = tf.stringValue }
+        func textDidChange(_ notification: Notification) {
+            if let tv = notification.object as? NSTextView { parent.text = tv.string }
         }
 
-        func control(_ control: NSControl, textView: NSTextView,
-                     doCommandBy selector: Selector) -> Bool {
+        func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
             if selector == #selector(NSResponder.insertNewline(_:)) {
                 parent.onCommit(); return true       // Enter → 확정
             }
@@ -177,5 +227,72 @@ struct AutoSelectTextField: NSViewRepresentable {
             }
             return false
         }
+
+        // 선택 범위가 가능하면 세로 가운데에 오도록 스크롤
+        func center(_ range: NSRange, in tv: NSTextView) {
+            guard let lm = tv.layoutManager, let tc = tv.textContainer,
+                  let clip = tv.enclosingScrollView?.contentView else { return }
+            let glyphRange = lm.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            var rect = lm.boundingRect(forGlyphRange: glyphRange, in: tc)
+            rect.origin.y += tv.textContainerInset.height
+
+            let visibleH = clip.bounds.height
+            let docH = tv.bounds.height
+            var targetY = rect.midY - visibleH / 2
+            targetY = max(0, min(targetY, max(0, docH - visibleH)))
+            clip.scroll(to: NSPoint(x: 0, y: targetY))
+            tv.enclosingScrollView?.reflectScrolledClipView(clip)
+        }
+    }
+}
+
+// MARK: - 현재 입력(한/영) 표시 배지
+
+// 현재 키보드 입력 소스의 주 언어가 한국어면 "가", 아니면 "A"를 보여준다.
+// 입력 소스가 바뀌면(한/영 전환) 알림을 받아 즉시 갱신.
+final class InputLanguageWatcher: ObservableObject {
+    @Published var isKorean: Bool = false
+    private var token: NSObjectProtocol?
+
+    func start() {
+        update()
+        guard token == nil else { return }
+        token = DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String),
+            object: nil, queue: .main) { [weak self] _ in self?.update() }
+    }
+
+    func update() {
+        guard let src = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else { return }
+        var korean = false
+        if let ptr = TISGetInputSourceProperty(src, kTISPropertyInputSourceLanguages) {
+            let langs = Unmanaged<CFArray>.fromOpaque(ptr).takeUnretainedValue() as NSArray
+            if let first = langs.firstObject as? String { korean = first.hasPrefix("ko") }
+        }
+        if isKorean != korean { isKorean = korean }
+    }
+
+    deinit {
+        if let t = token { DistributedNotificationCenter.default().removeObserver(t) }
+    }
+}
+
+struct InputLanguageBadge: View {
+    @StateObject private var watcher = InputLanguageWatcher()
+
+    var body: some View {
+        Text(watcher.isKorean ? "가" : "A")
+            .font(.system(size: 13, weight: .bold))
+            .frame(width: 26, height: 22)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill((watcher.isKorean ? Color.blue : Color.gray).opacity(0.18))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.secondary.opacity(0.4), lineWidth: 1)
+            )
+            .onAppear { watcher.start() }
+            .help(watcher.isKorean ? "한글 입력" : "영문 입력")
     }
 }

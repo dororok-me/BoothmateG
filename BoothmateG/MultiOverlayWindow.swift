@@ -2,10 +2,14 @@
 //  MultiOverlayWindow.swift
 //  BoothmateG
 //
-//  Version: 6.2.0
+//  Version: 6.5.0
 //  Changelog:
 //    6.1.0 - 상단 회색 제거
 //    6.2.0 - 옵션 패널을 상단 끝에 붙여 톱니/X를 가리게. 옵션 패널에 자체 닫기(X).
+//    6.3.0 - 글자 색에 검은색 추가. 어두운 패널과 구별되게 모든 색 동그라미에
+//            테두리를 일관되게 강화.
+//    6.4.0 - 자막 영역 상단 그라데이션 마스크(상단 흐림 효과) 제거.
+//    6.5.0 - 창 어디든 더블클릭하면 화면 전체로 확대(다시 더블클릭하면 원래 크기 복원).
 //
 
 import SwiftUI
@@ -13,10 +17,23 @@ import AppKit
 
 final class MultiOverlayController {
     private var panel: NSPanel?
+    private var savedFrame: NSRect? = nil   // 전체 보기 전 원래 크기
     private(set) var isVisible = false
 
     func toggle(store: MultiSubtitleStore) {
         if isVisible { hide() } else { show(store: store) }
+    }
+
+    // 화면 전체로 확대 ↔ 원래 크기 복원
+    func toggleFullView() {
+        guard let p = panel, let screen = p.screen ?? NSScreen.main else { return }
+        if let saved = savedFrame {
+            p.setFrame(saved, display: true, animate: true)
+            savedFrame = nil
+        } else {
+            savedFrame = p.frame
+            p.setFrame(screen.visibleFrame, display: true, animate: true)
+        }
     }
 
     func show(store: MultiSubtitleStore) {
@@ -29,7 +46,11 @@ final class MultiOverlayController {
         let w = max(760, mainWidth)
         let h: CGFloat = 620
 
-        let root = MultiOverlayView(store: store, onClose: { [weak self] in self?.hide() })
+        let root = MultiOverlayView(
+            store: store,
+            onClose: { [weak self] in self?.hide() },
+            onToggleFull: { [weak self] in self?.toggleFullView() }
+        )
         let hosting = NSHostingController(rootView: root)
         let p = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: w, height: h),
@@ -67,6 +88,7 @@ final class MultiOverlayController {
 struct MultiOverlayView: View {
     @ObservedObject var store: MultiSubtitleStore
     var onClose: () -> Void = {}
+    var onToggleFull: () -> Void = {}
 
     @AppStorage("multi_ov_font")     private var fontSize: Double = 30
     @AppStorage("multi_ov_bgop")     private var bgOpacity: Double = 0.8
@@ -81,7 +103,8 @@ struct MultiOverlayView: View {
         Color(red: 1.00, green: 0.92, blue: 0.23),
         Color(red: 0.45, green: 1.00, blue: 0.45),
         Color(red: 0.35, green: 0.85, blue: 1.00),
-        Color(red: 1.00, green: 0.55, blue: 0.20)
+        Color(red: 1.00, green: 0.55, blue: 0.20),
+        .black
     ]
 
     var body: some View {
@@ -124,6 +147,8 @@ struct MultiOverlayView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) { onToggleFull() }   // 어디든 더블클릭 → 전체 보기 토글
     }
 
     private func section(_ lang: String) -> some View {
@@ -166,7 +191,6 @@ struct MultiOverlayView: View {
                 withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("bottom", anchor: .bottom) }
             }
         }
-        .mask(LinearGradient(colors: [.clear, .black, .black], startPoint: .top, endPoint: .bottom))
     }
 
     private var optionsPanel: some View {
@@ -218,7 +242,7 @@ struct MultiOverlayView: View {
                             Circle()
                                 .fill(palette[i])
                                 .frame(width: 28, height: 28)
-                                .overlay(Circle().stroke(Color.white.opacity(0.3), lineWidth: 1))
+                                .overlay(Circle().stroke(Color.white.opacity(0.55), lineWidth: 1.5))
                                 .overlay(Circle().stroke(Color.white, lineWidth: colorIdx == i ? 3 : 0))
                         }
                         .buttonStyle(.plain)

@@ -2,10 +2,13 @@
 //  ContentView.swift
 //  BoothmateG
 //
-//  Version: 2.16.0
+//  Version: 2.29.0
 //  Changelog:
-//    2.15.0 - 헤더 좌/우 2등분, 상태 하단 이동, 모니터 아이콘
-//    2.16.0 - 오버레이(모니터) 버튼 켜짐/꺼짐 시각 구분 강화(켜짐=색 채움, 꺼짐=회색)
+//    2.26.0 - 음성 지원 배지 문구 '음성 지원' → '음성 지원 중'.
+//    2.27.0 - 모니터 아이콘 옆에 '음성지원' 토글 버튼 추가. 칼럼 폭 380 / 최소폭 1000.
+//    2.28.0 - 다국어 모드 음성 지원: 청중 언어 중 하나를 골라 그 언어의 번역 음성만 재생.
+//    2.29.0 - 청중 언어에서 화자 언어를 항상 제외(로드/저장/시작 시).
+//             기본값에 화자(영어)가 섞여 영어 빈 오버레이가 뜨던 문제 수정.
 //
 
 import SwiftUI
@@ -38,6 +41,7 @@ struct ContentView: View {
     @State private var audienceLangs: [String] = []
 
     @State private var sessionStart: Date? = nil
+    @State private var multiSessionStart: Date? = nil
 
     @AppStorage("console_targetFont") private var targetFont: Double = 18
     @AppStorage("console_sourceFont") private var sourceFont: Double = 14
@@ -52,24 +56,28 @@ struct ContentView: View {
             inputSourceBar
         }
         .padding(20)
-        .frame(minWidth: 880, minHeight: 540)
-        .background(night ? Color.black : Color.clear)
+        .frame(minWidth: 1000, minHeight: 540)
+        .background(consoleBackground)
         .preferredColorScheme(night ? .dark : nil)
         .onAppear {
             glossary.update(items: settings.loadGlossary())
             refreshInputName()
             migrateLanguageCodes()
-            audienceLangs = settings.loadAudienceLangs()
+            audienceLangs = settings.loadAudienceLangs().filter { $0 != settings.sourceLang }
             multiStore.setLanguages(audienceLangs)
         }
         .onChange(of: settings.playTranslatedAudio) { _, on in
             if on && isRunning { audioPlayer.start() } else { audioPlayer.stop() }
         }
+        .onChange(of: settings.multiAudioLang) { _, lang in
+            guard isMultiRunning else { return }
+            if lang.isEmpty { audioPlayer.stop() } else { audioPlayer.start() }
+        }
         .sheet(isPresented: $showGlossary) {
             GlossaryView(settings: settings) { items in glossary.update(items: items) }
         }
         .sheet(isPresented: $showSettings) {
-            ConsoleSettingsView(settings: settings)
+            ConsoleSettingsView(settings: settings, onExportTranscript: { exportCurrentTranscript() })
         }
         .sheet(isPresented: $showInputSource) {
             InputSourceView { dev in
@@ -79,8 +87,8 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showAudienceLangs) {
             AudienceLangView(settings: settings) { langs in
-                audienceLangs = langs
-                multiStore.setLanguages(langs)
+                audienceLangs = langs.filter { $0 != settings.sourceLang }
+                multiStore.setLanguages(audienceLangs)
             }
         }
     }
@@ -96,10 +104,15 @@ struct ContentView: View {
 
             Divider().frame(height: 80)
             singleColumn
+                .frame(width: 380, alignment: .topLeading)
+                .padding(10)
+                .background(ActivePulseBox(active: isRunning, color: .green))
             Divider().frame(height: 80)
             multiColumn
+                .frame(width: 380, alignment: .topLeading)
+                .padding(10)
+                .background(ActivePulseBox(active: isMultiRunning, color: .blue))
             Spacer()
-            rightMenu
         }
     }
 
@@ -147,25 +160,48 @@ struct ContentView: View {
                         Image(systemName: isRunning ? "stop.fill" : "play.fill")
                         Text(isRunning ? "정지" : "시작")
                     }
-                    .frame(minWidth: 48)
+                    .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(isRunning ? .red : .green)
+                .frame(width: 92)
                 .disabled(isMultiRunning)
 
-                timerView
+                timerLabel(sessionStart)
 
-                Button { subtitles.clear() } label: {
-                    Image(systemName: "arrow.counterclockwise")
+                resetButton(disabled: subtitles.segments.isEmpty && subtitles.currentSource.isEmpty) {
+                    subtitles.clear()
                 }
-                .help("자막 리셋")
-                .disabled(subtitles.segments.isEmpty && subtitles.currentSource.isEmpty)
 
                 overlayToggleButton(isOn: overlayController.isVisible, color: .green, help: "오버레이") {
                     overlayController.toggle(store: subtitles, glossary: glossary, mainWindow: NSApp.keyWindow)
                 }
+
+                audioSupportButton
             }
         }
+    }
+
+    // 모니터 아이콘 옆 '음성지원' 토글 버튼 (설정 안 들어가도 바로 전환)
+    // 켜짐=파랑, 꺼짐=회색. 켜진 상태로 번역 중이면 '음성 지원 중' 깜빡임.
+    private var audioSupportButton: some View {
+        Button {
+            settings.playTranslatedAudio.toggle()
+        } label: {
+            if settings.playTranslatedAudio && isRunning {
+                AudioSupportBadge()
+            } else {
+                HStack(spacing: 3) {
+                    Image(systemName: settings.playTranslatedAudio ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                    Text("음성지원")
+                }
+                .font(.caption)
+            }
+        }
+        .buttonStyle(.bordered)
+        .tint(settings.playTranslatedAudio ? .blue : .gray)
+        .disabled(isMultiRunning)
+        .help("번역 음성 재생 켜기/끄기")
     }
 
     // ── 오른쪽: 다국어 ──
@@ -180,7 +216,7 @@ struct ContentView: View {
 
             HStack(spacing: 6) {
                 Button { showAudienceLangs = true } label: {
-                    Text(audienceLangs.isEmpty ? "청중 언어 선택" : "청중: \(audienceTagList)")
+                    Text(audienceLangs.isEmpty ? "청중 언어 선택" : "선택 언어: \(audienceTagList)")
                         .font(.caption).lineLimit(1)
                 }
                 .disabled(isRunning || isMultiRunning)
@@ -194,40 +230,83 @@ struct ContentView: View {
                         Image(systemName: isMultiRunning ? "stop.fill" : "play.fill")
                         Text(isMultiRunning ? "정지" : "시작")
                     }
-                    .frame(minWidth: 48)
+                    .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(isMultiRunning ? .red : .blue)
+                .frame(width: 92)
                 .disabled(audienceLangs.isEmpty || isRunning)
+
+                timerLabel(multiSessionStart)
+
+                resetButton(disabled: multiStore.segments.isEmpty && multiStore.currentSource.isEmpty) {
+                    multiStore.clear()
+                }
 
                 overlayToggleButton(isOn: multiOverlay.isVisible, color: .blue, help: "다국어 오버레이") {
                     if multiStore.langs.isEmpty { multiStore.setLanguages(audienceLangs) }
                     multiOverlay.toggle(store: multiStore)
                 }
+
+                multiAudioMenu
             }
         }
     }
 
-    // ── 맨 오른쪽: 전역 메뉴 ──
-    private var rightMenu: some View {
-        VStack(alignment: .trailing, spacing: 8) {
-            Button { showSettings = true } label: {
-                Image(systemName: "gearshape"); Text("설정")
+    // ── 맨 오른쪽: 전역 메뉴 ── (v2.25.0: 하단 입력 소스 줄로 이동, 제거됨)
+
+    // 다국어 모드 음성: 청중 언어 중 하나만 골라 그 음성만 재생 (v2.28.0)
+    private var multiAudioMenu: some View {
+        Menu {
+            Button("음성 끄기") { settings.multiAudioLang = "" }
+            ForEach(audienceLangs, id: \.self) { code in
+                Button(langShort(code)) { settings.multiAudioLang = code }
             }
-            Button { showGlossary = true } label: {
-                Image(systemName: "character.book.closed"); Text("용어집")
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: multiAudioActive ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                Text(multiAudioActive ? langShort(settings.multiAudioLang) : "음성")
             }
+            .font(.caption)
         }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .tint(multiAudioActive ? .blue : .gray)
+        .disabled(audienceLangs.isEmpty)
+        .help("재생할 번역 음성 언어 선택 (한 언어만)")
     }
 
-    private var timerView: some View {
+    // 선택된 음성 언어가 현재 청중 언어 목록에 실제로 있는지
+    private var multiAudioActive: Bool {
+        !settings.multiAudioLang.isEmpty && audienceLangs.contains(settings.multiAudioLang)
+    }
+
+    // 언어 코드 → 짧은 표기
+    private func langShort(_ code: String) -> String {
+        supportedLanguages.first { $0.id == code }.map { String($0.label.prefix(6)) } ?? code
+    }
+
+    // 경과 타이머 (줄바꿈 방지: fixedSize). start가 nil이면 00:00:00 회색.
+    private func timerLabel(_ start: Date?) -> some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            let e = sessionStart.map { max(0, context.date.timeIntervalSince($0)) } ?? 0
+            let e = start.map { max(0, context.date.timeIntervalSince($0)) } ?? 0
             Text(formatElapsed(e))
                 .font(.system(size: 12, design: .monospaced))
                 .monospacedDigit()
-                .foregroundStyle(sessionStart != nil ? .primary : .secondary)
+                .lineLimit(1)
+                .fixedSize()
+                .foregroundStyle(start != nil ? .primary : .secondary)
         }
+    }
+
+    // '자막리셋' 버튼 (텍스트형)
+    private func resetButton(disabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text("자막리셋").font(.caption)
+        }
+        .buttonStyle(.bordered)
+        .disabled(disabled)
+        .help("자막 리셋")
     }
 
     private var sourceShort: String {
@@ -353,9 +432,9 @@ struct ContentView: View {
         }
     }
 
-    // ── 하단: 입력 소스 + 상태 ──
+    // ── 하단: 입력 소스 + 설정/용어집 + 상태 ──
     private var inputSourceBar: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             Image(systemName: "mic").foregroundStyle(.secondary)
             Button { showInputSource = true } label: {
                 Text("입력 소스: \(currentInputName.isEmpty ? "기본 장치" : currentInputName)")
@@ -364,6 +443,18 @@ struct ContentView: View {
             .buttonStyle(.plain)
             Image(systemName: "chevron.up.chevron.down")
                 .font(.caption2).foregroundStyle(.secondary)
+
+            Divider().frame(height: 14)
+
+            Button { showSettings = true } label: {
+                HStack(spacing: 4) { Image(systemName: "gearshape"); Text("설정") }.font(.caption)
+            }
+            .buttonStyle(.plain)
+
+            Button { showGlossary = true } label: {
+                HStack(spacing: 4) { Image(systemName: "character.book.closed"); Text("용어집") }.font(.caption)
+            }
+            .buttonStyle(.plain)
 
             Spacer()
 
@@ -431,6 +522,7 @@ struct ContentView: View {
     }
 
     private func stop() {
+        TranscriptArchive.autoSave(transcriptText(started: sessionStart), started: sessionStart)
         audio.stop()
         client.disconnect()
         audioPlayer.stop()
@@ -449,7 +541,14 @@ struct ContentView: View {
             statusMessage = "❌ 청중 언어를 먼저 선택하세요"; return
         }
 
-        multiStore.setLanguages(audienceLangs)
+        // 화자 언어는 타깃에서 제외 (영어 화자인데 영어 청중 같은 빈 세션 방지)
+        let targets = audienceLangs.filter { $0 != settings.sourceLang }
+        guard !targets.isEmpty else {
+            statusMessage = "❌ 화자 언어와 다른 청중 언어를 선택하세요"; return
+        }
+        audienceLangs = targets
+
+        multiStore.setLanguages(targets)
         statusMessage = "다국어 연결 중..."
 
         multiClient.onConnected = {
@@ -457,17 +556,22 @@ struct ContentView: View {
         }
         multiClient.onSource = { t in DispatchQueue.main.async { self.multiStore.appendSource(t) } }
         multiClient.onTarget = { lang, t in DispatchQueue.main.async { self.multiStore.appendTarget(lang, t) } }
+        multiClient.onAudio = { [audioPlayer] lang, d in
+            // 선택한 언어의 음성만 재생
+            if lang == self.settings.multiAudioLang { audioPlayer.enqueue(pcm16: d) }
+        }
         multiClient.onTurnComplete = { DispatchQueue.main.async { self.multiStore.finalizeTurn() } }
         multiClient.onError = { m in DispatchQueue.main.async { self.statusMessage = "❌ \(m)" } }
 
         audio.onAudioData = { [multiClient] d in multiClient.sendAudio(d) }
 
-        multiClient.connect(apiKey: settings.geminiApiKey, sourceLang: settings.sourceLang, targets: audienceLangs)
+        multiClient.connect(apiKey: settings.geminiApiKey, sourceLang: settings.sourceLang, targets: targets)
 
         do {
             try audio.start()
             isMultiRunning = true
-            sessionStart = Date()
+            multiSessionStart = Date()
+            if !settings.multiAudioLang.isEmpty { audioPlayer.start() }
             multiOverlay.show(store: multiStore)
         } catch {
             statusMessage = "❌ 마이크 시작 실패: \(error.localizedDescription)"
@@ -476,11 +580,71 @@ struct ContentView: View {
     }
 
     private func stopMulti() {
+        TranscriptArchive.autoSave(transcriptText(started: multiSessionStart), started: multiSessionStart)
         audio.stop()
         multiClient.disconnect()
+        audioPlayer.stop()
         isMultiRunning = false
-        sessionStart = nil
+        multiSessionStart = nil
         statusMessage = "정지됨"
+    }
+
+    // ── 전사문 텍스트 생성 (v2.20.0, v2.24.0: 시작 시각 매개변수화) ──
+    // 다국어 세션 내용이 있으면 다국어 형식, 아니면 단일 언어 형식으로 구성.
+    private func transcriptText(started: Date?) -> String {
+        var lines: [String] = []
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm"
+        lines.append("BoothmateG 전사문 — \(f.string(from: started ?? Date()))")
+        lines.append(String(repeating: "─", count: 24))
+        lines.append("")
+
+        if !multiStore.segments.isEmpty {
+            for seg in multiStore.segments {
+                if !seg.source.isEmpty { lines.append("· \(seg.source)") }
+                for lang in multiStore.langs {
+                    if let t = seg.targets[lang], !t.isEmpty {
+                        lines.append("[\(lang)] \(t)")
+                    }
+                }
+                lines.append("")
+            }
+        } else {
+            for seg in subtitles.segments {
+                if !seg.sourceText.isEmpty { lines.append("· \(seg.sourceText)") }
+                if !seg.targetText.isEmpty { lines.append(glossary.normalize(seg.targetText)) }
+                lines.append("")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    // ── 전사문 내보내기 (설정 메뉴 버튼) ──
+    private func exportCurrentTranscript() {
+        if subtitles.segments.isEmpty && multiStore.segments.isEmpty {
+            statusMessage = "내보낼 전사문이 없습니다"
+            return
+        }
+        let started = multiStore.segments.isEmpty ? sessionStart : multiSessionStart
+        TranscriptArchive.export(transcriptText(started: started), started: started)
+    }
+
+    // ── 메인 콘솔 배경 (v2.19.0) ──
+    // 파스텔 옅은 푸른 계열 그라데이션. 야간 모드는 기존대로 검정 유지.
+    @ViewBuilder
+    private var consoleBackground: some View {
+        if night {
+            Color.black
+        } else {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.93, green: 0.96, blue: 1.00),
+                    Color(red: 0.84, green: 0.91, blue: 0.99)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
     }
 }
 
@@ -515,6 +679,50 @@ struct SegmentRow: View {
         .padding(10)
         .background(Color.blue.opacity(0.06))
         .cornerRadius(6)
+    }
+}
+
+// ─────────────────────────────────────────────────
+// 번역 진행 중 표시 박스 (v2.23.0)
+// active일 때 칼럼 뒤에 은은한 색을 깔고, 숨 쉬듯(밝아졌다 흐려졌다) 천천히 변화.
+// idle일 때는 투명(박스 없음).
+struct ActivePulseBox: View {
+    var active: Bool
+    var color: Color
+    @State private var pulse = false
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 12)
+            .fill(color.opacity(active ? (pulse ? 0.22 : 0.09) : 0.0))
+            .animation(
+                active ? .easeInOut(duration: 1.6).repeatForever(autoreverses: true) : .easeOut(duration: 0.4),
+                value: pulse
+            )
+            .onAppear { pulse = active }
+            .onChange(of: active) { _, on in pulse = on }
+    }
+}
+
+// ─────────────────────────────────────────────────
+// 음성 지원(번역 음성 재생) 켜진 상태 표시 (v2.18.0)
+// 화면에 나타날 때(=조건 충족 시)만 onAppear로 은은하게 맥동.
+// 빨간 마이크(입력 받는 느낌)를 피하려고 스피커 + "음성 지원" 텍스트 사용.
+struct AudioSupportBadge: View {
+    @State private var pulse = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "speaker.wave.2.fill")
+                .font(.system(size: 11, weight: .semibold))
+            Text("음성 지원 중")
+                .font(.system(size: 11, weight: .semibold))
+        }
+        .foregroundStyle(.blue)
+        .opacity(pulse ? 1.0 : 0.55)
+        .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true),
+                   value: pulse)
+        .onAppear { pulse = true }
+        .help("번역 음성 재생 중")
     }
 }
 

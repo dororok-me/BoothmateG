@@ -2,9 +2,10 @@
 //  AudienceLangView.swift
 //  BoothmateG
 //
-//  Version: 1.0.0
+//  Version: 1.1.0
 //  Changelog:
 //    1.0.0 - 최초 작성. 청중 언어(여러 개)를 체크로 고르는 시트.
+//    1.1.0 - 불러올 때 화자 언어/유효하지 않은 코드를 제외 (개수·체크 표시 정확화).
 //
 
 import SwiftUI
@@ -67,7 +68,11 @@ struct AudienceLangView: View {
         }
         .padding(20)
         .frame(width: 440, height: 540)
-        .onAppear { selected = Set(settings.loadAudienceLangs()) }
+        .onAppear {
+            // 화자 언어와 목록에 없는 코드는 제외하고 불러옴 (개수/체크 정확화)
+            let valid = Set(targetCandidates.map { $0.id })
+            selected = Set(settings.loadAudienceLangs()).intersection(valid)
+        }
     }
 
     // 화자 언어는 타겟 후보에서 제외

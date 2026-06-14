@@ -2,11 +2,12 @@
 //  SubtitleStore.swift
 //  BoothmateG
 //
-//  Version: 1.3.0
+//  Version: 1.4.0
 //  Changelog:
 //    1.1.0 - turnComplete 기반 (Gemini가 turnComplete를 거의 안 보내서 실패)
 //    1.2.0 - 번역 텍스트의 마침표(.?!) 도착 시 자동으로 segment 확정
 //    1.3.0 - updateSource() 추가 (원문 줄도 수정 가능)
+//    1.4.0 - 번역 진행 줄 맨 앞 공백 제거 (한 칸 들여쓰기처럼 보이는 현상 방지)
 //
 
 import Foundation
@@ -35,6 +36,10 @@ final class SubtitleStore: ObservableObject {
 
     func appendTarget(_ chunk: String) {
         currentTarget += chunk
+        // 번역문 맨 앞 공백 제거 (한 칸 들여쓰기처럼 보이는 현상 방지)
+        if currentTarget.first == " " {
+            currentTarget = String(currentTarget.drop { $0 == " " })
+        }
         // 번역 텍스트에 마침표가 들어왔으면 segment 확정 시도
         flushIfSentenceEnded()
     }
