@@ -25,7 +25,7 @@ final class AudioBroadcaster {
 
     // Gemini Live 출력 기준
     private let sampleRate = 24000                 // 24kHz
-    private let gapFlush: TimeInterval = 0.6       // 이만큼 무음이면 한 클립으로 마감
+    private let gapFlush: TimeInterval = 1.6       // 안전망: 이만큼 끊기면 마감(문장 경계는 turnComplete로)
     private let maxDur: TimeInterval = 10.0        // 너무 길면 강제 분할
     private var maxBytes: Int { Int(Double(sampleRate * 2) * maxDur) }   // 16bit=2byte
     private var minBytes: Int { Int(Double(sampleRate * 2) * 0.1) }      // 0.1초 미만 조각은 버림
@@ -72,6 +72,14 @@ final class AudioBroadcaster {
             }
         }
     }
+    /// 문장 경계(turnComplete)에서 호출 → 쌓인 모든 언어 버퍼를 한 클립으로 마감.
+        /// 단어 중간이 아니라 문장 끝에서 잘려 음성이 자연스러움.
+        func flushBoundary() {
+            q.async {
+                guard self.active else { return }
+                for lang in Array(self.buffers.keys) { self.flush(lang) }
+            }
+        }
 
     // MARK: - 내부
 

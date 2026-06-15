@@ -568,6 +568,11 @@ struct ContentView: View {
               let ev = try? JSONDecoder().decode(QREvent.self, from: d) else { return [] }
         return ev.sessions
     }
+    private var currentEventLogoPath: String {
+            guard let d = audienceQREventJSON.data(using: .utf8),
+                  let ev = try? JSONDecoder().decode(QREvent.self, from: d) else { return "" }
+            return ev.logoPath
+        }
     private func sessionLabel(_ s: QRSession) -> String {
         let l = [s.date, s.name].filter { !$0.isEmpty }.joined(separator: " · ")
         return l.isEmpty ? "세션" : l
@@ -606,7 +611,8 @@ struct ContentView: View {
             langs[settings.targetLang] = langLabel(settings.targetLang)
         }
         relay.startBroadcast(sessionId: broadcastSessionId, eventName: info.event,
-                             sessionName: info.session, mode: mode, langs: langs)
+                                     sessionName: info.session, mode: mode, langs: langs,
+                                     logoPath: currentEventLogoPath)
         audioBroadcaster.start(sessionId: broadcastSessionId)
         statusMessage = "📡 청중 송출 중"
     }
@@ -657,7 +663,7 @@ struct ContentView: View {
                     audioPlayer.enqueue(pcm16: d)
                     self.audioBroadcaster.append(lang: self.settings.targetLang, pcm16: d)
                 }
-        client.onTurnComplete = { DispatchQueue.main.async { self.subtitles.finalizeTurn(); self.relaySingle() } }
+        client.onTurnComplete = { DispatchQueue.main.async { self.subtitles.finalizeTurn(); self.relaySingle(); self.audioBroadcaster.flushBoundary() } }
         client.onError = { m in DispatchQueue.main.async { self.statusMessage = "❌ \(m)" } }
         client.onClosed = {
             DispatchQueue.main.async { if self.isRunning { self.statusMessage = "연결 종료됨" } }
@@ -720,7 +726,7 @@ struct ContentView: View {
                     if lang == self.settings.multiAudioLang { audioPlayer.enqueue(pcm16: d) }
                     self.audioBroadcaster.append(lang: lang, pcm16: d)
                 }
-        multiClient.onTurnComplete = { DispatchQueue.main.async { self.multiStore.finalizeTurn(); self.relayMultiAll() } }
+        multiClient.onTurnComplete = { DispatchQueue.main.async { self.multiStore.finalizeTurn(); self.relayMultiAll(); self.audioBroadcaster.flushBoundary() } }
         multiClient.onError = { m in DispatchQueue.main.async { self.statusMessage = "❌ \(m)" } }
 
         audio.onAudioData = { [multiClient] d in multiClient.sendAudio(d) }

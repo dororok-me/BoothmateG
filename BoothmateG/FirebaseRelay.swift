@@ -2,13 +2,17 @@
 //  FirebaseRelay.swift
 //  BoothmateG
 //
-//  2.2.0 - clearLive 추가
+//  2.3.0 - 행사 로고 업로드(uploadLogo) 추가 → 청중 페이지 헤더에 표시
 //  Changelog:
 //    1.0.0 - 최초 작성. RTDB REST로 자막 실시간 송출.
 //    1.1.0 - deleteSession 추가 (행사 종료 시 RTDB 세션 데이터 삭제).
 //    2.0.0 - 보안: 호스트 로그인(Firebase Auth) + 모든 쓰기에 토큰 부착. 싱글톤화.
 //    2.1.0 - 청중 음성(2단계): uploadAudioClip 추가. WAV 클립을 Storage에 올리고
 //            RTDB /sessions/{id}/audioLive/{lang}에 {seq,url,ts} push.
+//    2.2.0 - clearLive 추가.
+//    2.3.0 - uploadLogo 추가: 행사 로고를 Storage(audio/{sid}/logo.ext)에 올리고
+//            meta.logoUrl을 PATCH → 청중 페이지가 행사명 왼쪽에 로고 표시.
+//            startBroadcast에 logoPath 파라미터(기본값 "") 추가.
 //
 
 import Foundation
@@ -157,7 +161,7 @@ final class FirebaseRelay: ObservableObject {
     // MARK: - 송출 (기존 API 유지)
 
     func startBroadcast(sessionId: String, eventName: String, sessionName: String,
-                        mode: String, langs: [String: String]) {
+                        mode: String, langs: [String: String], logoPath: String = "") {
         self.sessionId = sessionId
         self.active = true
         latest.removeAll(); lastSent.removeAll(); scheduled.removeAll()
@@ -169,6 +173,10 @@ final class FirebaseRelay: ObservableObject {
             "active": true
         ]
         send("PUT", "sessions/\(sessionId)/meta", meta)
+        // 행사 로고가 있으면 Storage에 올리고 meta.logoUrl을 채움(완료되면 청중 화면에 표시)
+        if !logoPath.isEmpty {
+            uploadLogo(sessionId: sessionId, path: logoPath)
+        }
     }
 
     func stopBroadcast() {
@@ -237,6 +245,49 @@ final class FirebaseRelay: ObservableObject {
                 }
                 let body: [String: Any] = ["seq": seq, "url": dl, "ts": Int(Date().timeIntervalSince1970 * 1000)]
                 self.send("POST", "sessions/\(sessionId)/audioLive/\(lang)", body)
+            }.resume()
+        }
+    }
+
+    // MARK: - 행사 로고 업로드
+    // 로컬 로고 파일을 Storage(audio/{sid}/logo.ext)에 올리고, 성공하면
+    // meta.logoUrl을 PATCH → 청중 페이지가 행사명 왼쪽에 로고를 표시.
+    // ※ 기존 Storage 규칙(/audio/**)을 그대로 쓰기 위해 audio 경로 아래에 저장.
+    func uploadLogo(sessionId: String, path: String) {
+        guard !sessionId.isEmpty, !path.isEmpty else { return }
+        guard let imgData = try? Data(contentsOf: URL(fileURLWithPath: path)), !imgData.isEmpty else { return }
+
+        let ext = (path as NSString).pathExtension.lowercased()
+        let mime: String
+        switch ext {
+        case "jpg", "jpeg": mime = "image/jpeg"
+        case "gif":         mime = "image/gif"
+        case "heic":        mime = "image/heic"
+        case "webp":        mime = "image/webp"
+        default:            mime = "image/png"
+        }
+        let safeExt = ext.isEmpty ? "png" : ext
+        let objectPath = "audio/\(sessionId)/logo.\(safeExt)"
+        let enc = objectPath.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? objectPath
+
+        withToken { token in
+            guard let token else { return }
+            let up = "https://firebasestorage.googleapis.com/v0/b/\(Self.storageBucket)/o?uploadType=media&name=\(enc)"
+            guard let url = URL(string: up) else { return }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("Firebase \(token)", forHTTPHeaderField: "Authorization")
+            req.setValue(mime, forHTTPHeaderField: "Content-Type")
+            req.httpBody = imgData
+            URLSession.shared.dataTask(with: req) { data, _, _ in
+                guard let data,
+                      let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+                var dl = "https://firebasestorage.googleapis.com/v0/b/\(Self.storageBucket)/o/\(enc)?alt=media"
+                if let dtoken = (j["downloadTokens"] as? String)?.components(separatedBy: ",").first,
+                   !dtoken.isEmpty {
+                    dl += "&token=\(dtoken)"
+                }
+                self.send("PATCH", "sessions/\(sessionId)/meta", ["logoUrl": dl])
             }.resume()
         }
     }

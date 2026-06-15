@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#ffffff">
 <title>실시간 자막 · Live Subtitles</title>
 <!--
-  BoothmateG 청중용 자막 페이지 (sub.html)  v1.3.0
+  BoothmateG 청중용 자막 페이지 (sub.html)  v1.5.1
   ───────────────────────────────────────────────────────────────────────
   변경:
     1.1.0 - 언어 선택이 안 뜨던 문제 수정. live 노드에서 실제 송출 언어 발견.
@@ -15,6 +15,12 @@
             켠 시점 이후(seq 기준)부터 순서대로 재생.
     1.3.1 - 음성 재생을 Web Audio(fetch+decode)에서 <audio> 태그 순차 재생으로 변경.
             Storage 클립을 CORS 설정 없이 바로 재생(이전엔 fetch가 CORS로 막혀 무음이었음).
+    1.4.0 - 음성 끊김 개선: <audio> 2개 이중 버퍼. 현재 클립 재생 중 다음 클립을
+            미리 받아둬(preload) 전환 시 로딩 틈을 없앰. iOS 잠금은 2개 모두 해제.
+    1.5.0 - 음성 완전 무결: Web Audio로 클립을 샘플 단위로 이어붙여 재생(틈 0).
+            ※ Storage 버킷에 CORS 설정 필요(웹에서 클립 fetch 허용).
+    1.5.1 - iOS 사파리 대응: 무음 루프 <audio>로 오디오 세션을 media 채널로 유지
+            (무음스위치 무시 + 컨텍스트 suspend 방지). pump에서 필요시 resume.
   ─────────────────────────────────────────────
   · QR 링크 형식:  https://dororokrealtimespeech.web.app/sub.html?s=<세션ID>
   · 읽는 데이터(Realtime Database) 구조:
@@ -174,11 +180,14 @@ let buf = { lines: [], current: "" };
 
 // ── 음성 재생 상태 ──
 let audioOn = false;
-let audioEl = null;         // <audio> 요소 (CORS 없이 다른 도메인 재생)
+let audioCtx = null;        // Web Audio 컨텍스트 (클립을 샘플 단위로 이어붙임 → 무결한 재생)
+let nextStartTime = 0;      // 다음 클립을 시작할 컨텍스트 시각(초)
+let liveSources = [];       // 예약/재생 중인 소스 (정지용)
+let pumping = false;        // pump 루프 중복 방지
 let audioUnsub = null;      // audioLive 구독 해제 함수
 let audioBaseline = 0;      // 켠 시점의 마지막 seq (이보다 큰 클립만 재생)
 let clipQueue = [];         // 받은 클립 URL 대기열 (순서 보존)
-let playing = false;
+let keepAlive = null;       // iOS: 무음 루프 <audio> (오디오 세션을 media 채널로 유지)
 const SILENT_WAV = "data:audio/wav;base64,UklGRsQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 // meta.langs에 라벨이 없을 때 쓰는 표시명 폴백
@@ -311,13 +320,26 @@ function enableAudio(){
   audioOn = true;
   audioBtn.classList.add("on");
   audioBtn.textContent = "🔈 음성 끄기";
-  if (!audioEl){
-    audioEl = new Audio();
-    audioEl.onended = playNext;
-    audioEl.onerror = () => { playing = false; playNext(); };
+  if (!audioCtx){
+    const AC = window.AudioContext || window.webkitAudioContext;
+    audioCtx = new AC();
   }
-  // iOS 오디오 잠금 해제: 사용자 탭 안에서 '동기적으로' 무음을 한 번 재생
-  try { audioEl.src = SILENT_WAV; audioEl.play().catch(()=>{}); } catch(e){}
+  // iOS 우회: 무음 루프 <audio>를 사용자 탭 안에서 재생.
+  //  → iOS가 오디오 세션을 'media' 채널로 전환 → Web Audio가 무음스위치를 무시하고
+  //    재생되며, 컨텍스트가 자동으로 잠들지(suspend) 않음.
+  if (!keepAlive){
+    keepAlive = new Audio(SILENT_WAV);
+    keepAlive.loop = true;
+  }
+  try { keepAlive.play().catch(()=>{}); } catch(e){}
+  // iOS 잠금 해제: 사용자 탭 안에서 컨텍스트 resume + 무음 버퍼 한 번 재생
+  try {
+    audioCtx.resume();
+    const b = audioCtx.createBuffer(1, 1, 22050);
+    const s = audioCtx.createBufferSource();
+    s.buffer = b; s.connect(audioCtx.destination); s.start(0);
+  } catch(e){}
+  nextStartTime = 0;
   subscribeAudio();
 }
 
@@ -327,14 +349,22 @@ function stopAudio(){
   audioBtn.textContent = "🔊 음성 듣기";
   if (audioUnsub){ try { audioUnsub(); } catch(e){} audioUnsub = null; }
   clipQueue = [];
-  playing = false;
-  if (audioEl){ try { audioEl.pause(); } catch(e){} }
+  stopAllSources();
+  if (keepAlive){ try { keepAlive.pause(); } catch(e){} }
+  if (audioCtx){ try { audioCtx.suspend(); } catch(e){} }
+}
+
+function stopAllSources(){
+  liveSources.forEach(s => { try { s.stop(); } catch(e){} });
+  liveSources = [];
+  nextStartTime = 0;
 }
 
 // 현재 언어의 audioLive 구독 (언어 바뀌면 다시 호출)
 async function subscribeAudio(){
   if (audioUnsub){ try { audioUnsub(); } catch(e){} audioUnsub = null; }
   clipQueue = [];
+  stopAllSources();
   const aref = ref(db, `sessions/${sid}/audioLive/${currentLang}`);
   // 켠 시점의 마지막 seq를 기준선으로 → 그 이후 문장부터 재생 (기기 시계와 무관)
   audioBaseline = 0;
@@ -349,18 +379,44 @@ async function subscribeAudio(){
     if (!v || !v.url || typeof v.seq !== "number") return;
     if (v.seq <= audioBaseline) return;        // 켜기 전 클립은 건너뜀
     clipQueue.push(v.url);
-    if (!playing) playNext();
+    pump();
   });
 }
 
-function playNext(){
-  if (!audioOn || !audioEl){ playing = false; return; }
-  if (clipQueue.length > 3) clipQueue = clipQueue.slice(-2);   // 너무 밀리면 최신만
-  if (!clipQueue.length){ playing = false; return; }
-  const url = clipQueue.shift();
-  playing = true;
-  audioEl.src = url;
-  audioEl.play().catch(() => { playing = false; playNext(); });
+// 디코드(promise/콜백 양쪽 Safari 호환)
+function decode(arr){
+  return new Promise((resolve, reject) => {
+    const p = audioCtx.decodeAudioData(arr, resolve, reject);
+    if (p && p.then) p.then(resolve).catch(reject);
+  });
+}
+
+// 큐의 클립을 순서대로 받아 디코드 후, 컨텍스트 시각에 '이어붙여' 예약 재생.
+// 클립 사이 틈 없이 한 음성처럼 들림.
+async function pump(){
+  if (pumping || !audioOn || !audioCtx) return;
+  pumping = true;
+  while (audioOn && clipQueue.length){
+    const url = clipQueue.shift();
+    try {
+      if (audioCtx.state === "suspended"){ try { await audioCtx.resume(); } catch(e){} }
+      const resp = await fetch(url);
+      const arr = await resp.arrayBuffer();
+      const buf = await decode(arr);
+      if (!audioOn) break;
+      const now = audioCtx.currentTime;
+      // 밀렸으면(예약 시각이 지났으면) 지금 살짝 뒤부터, 아니면 직전 클립 끝에 바로 이어서
+      if (nextStartTime < now + 0.08) nextStartTime = now + 0.08;
+      const src = audioCtx.createBufferSource();
+      src.buffer = buf;
+      src.connect(audioCtx.destination);
+      src.start(nextStartTime);
+      nextStartTime += buf.duration;
+      liveSources.push(src);
+      src.onended = () => { const i = liveSources.indexOf(src); if (i >= 0) liveSources.splice(i, 1); };
+    } catch(e){ /* CORS/디코드 실패 → 이 클립만 건너뜀 */ }
+  }
+  pumping = false;
 }
 
 // ── 자막 저장 ──
