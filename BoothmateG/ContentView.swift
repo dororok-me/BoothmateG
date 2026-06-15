@@ -2,12 +2,14 @@
 //  ContentView.swift
 //  BoothmateG
 //
-//  Version: 2.34.0
+//  Version: 2.35.0
 //  Changelog:
 //    2.31.0 - 다국어 화자를 단일 소스와 분리(multiSourceLang). 헤더에 화자 선택 picker.
 //    2.32.0 - 청중 송출: QR 세션 선택 + 송출 토글. 자막을 FirebaseRelay로 실시간 송출.
 //    2.33.0 - 송출 버튼 문구 '송출/송출 중' → '자막 송출 시작/자막 송출 중'.
-//    2.34.0 - 송출 옆에 'QR 보기' 버튼 추가(선택 세션의 QR을 바로 띄움, BroadcastQRView).
+//    2.34.0 - 송출 옆에 ‘QR 보기’ 버튼 추가(선택 세션의 QR을 바로 띄움, BroadcastQRView).
+//    2.35.0 - 청중 송출 텍스트에도 용어집 적용(relaySingle/relayMulti에 glossary.normalize).
+//             콘솔·오버레이·청중이 동일한 용어로 통일됨.
 //
 
 import SwiftUI
@@ -620,14 +622,20 @@ struct ContentView: View {
     // 단일 모드 자막 송출
     private func relaySingle() {
         guard relay.active else { return }
-        let lines = Array(subtitles.segments.map { $0.targetText }.suffix(60))
-        relay.updateLive(lang: settings.targetLang, current: subtitles.currentTarget, lines: lines)
+        // 청중에게도 용어집 적용된 텍스트를 보냄 (오버레이/콘솔과 동일하게 통일)
+        let lines = Array(subtitles.segments.map { glossary.normalize($0.targetText) }.suffix(60))
+        relay.updateLive(lang: settings.targetLang,
+                         current: glossary.normalize(subtitles.currentTarget),
+                         lines: lines)
     }
     // 다국어 모드 자막 송출 (언어 1개)
     private func relayMulti(_ lang: String) {
         guard relay.active else { return }
-        let lines = Array(multiStore.segments.compactMap { $0.targets[lang] }.suffix(60))
-        relay.updateLive(lang: lang, current: multiStore.currentTargets[lang] ?? "", lines: lines)
+        // 청중에게도 용어집 적용된 텍스트를 보냄
+        let lines = Array(multiStore.segments.compactMap { $0.targets[lang] }.map { glossary.normalize($0) }.suffix(60))
+        relay.updateLive(lang: lang,
+                         current: glossary.normalize(multiStore.currentTargets[lang] ?? ""),
+                         lines: lines)
     }
     private func relayMultiAll() {
         guard relay.active else { return }

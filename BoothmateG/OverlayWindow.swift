@@ -2,10 +2,19 @@
 //  OverlayWindow.swift
 //  BoothmateG
 //
-//  Version: 1.7.0
+//  Version: 1.10.0
 //  Changelog:
+//    1.10.0 - 설정 패널 스크롤 막대 항상 표시(.scrollIndicators(.visible)).
+//             설정 열렸을 때 hitTest 통과를 가장자리 리사이즈보다 우선 → 창 어디든
+//             패널 바깥 클릭 시 설정이 확실히 닫히도록 수정.
+//    1.9.0 - 줄 간격을 실제 .lineSpacing()으로 적용(한 문단 내 줄 높이, 카라오케 줄 포함).
+//            기존 "줄 간격"(세그먼트 사이)은 "단락 간격"으로 명칭 변경 + 별도 유지.
 //    1.6.0 - 설정 패널이 열려 있을 때 패널 바깥을 클릭하면 닫히고
 //            전체 자막 화면으로 돌아가도록 처리 (바깥 클릭 닫기 레이어 추가).
+//    1.8.2 - 설정 패널을 열어도 창 높이가 패널 높이만큼 늘어나던 문제 수정:\n//            호스팅 뷰 sizingOptions=[]로 창 크기 잠금 + 설정 패널 내부 스크롤.\n//    1.8.1 - 카라오케 드립: 등장 방향 왼쪽→오른쪽으로 변경, 완료 시 간격 변화 제거
+//            (단어 사이/줄 간격을 확정 자막과 동일하게 맞춤).
+//    1.8.0 - 단일 언어 진행 자막을 카라오케(드립) 방식으로: 새 단어가 하나씩 등장.
+//            (KaraokeCurrentLine + FlowLayout 추가)
 //    1.7.0 - 창 어디든 더블클릭하면 화면 전체로 확대(다시 더블클릭하면 원래 크기 복원).
 //    1.0.0 - 최초 작성. 텔레프롬프터 오버레이 창
 //    1.1.0 - 설정 패널 클릭 가능 hitTest, OBS 경계선, 스크롤 방향
@@ -83,6 +92,9 @@ final class OverlayWindowController {
                 self?.hide()
             })
             let hosting = NSHostingController(rootView: view)
+            // 콘텐츠의 고유 크기가 창 크기를 바꾸지 못하게 잠금
+            // (설정 패널을 열어도 창이 패널 높이만큼 늘어나던 문제 방지)
+            hosting.sizingOptions = []
             hostingController = hosting
 
             let container = NSView()
@@ -242,10 +254,11 @@ class OverlayResizeHandle: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? {
         let local = convert(point, from: superview)
         guard bounds.contains(local) else { return nil }
-        // 가장자리: 리사이즈 인터셉트 (최우선)
-        if edge(at: local) != .none { return self }
-        // 버튼/설정 패널 영역: SwiftUI로 통과 (클릭 가능)
+        // 통과 영역(설정 열림/우상단 버튼)은 최우선으로 SwiftUI에 넘긴다.
+        // (가장자리 리사이즈보다 먼저 판정 → 설정 열렸을 때 창 어디를 클릭해도 '바깥 클릭 닫기'가 동작)
         if shouldPassThrough?(local, bounds) == true { return nil }
+        // 가장자리: 리사이즈 인터셉트
+        if edge(at: local) != .none { return self }
         // 나머지 전체 영역: 창 드래그
         return self
     }
@@ -270,7 +283,8 @@ struct OverlayContentView: View {
     @AppStorage("ov_showSource")   private var showSource: Bool = false
     @AppStorage("ov_srcFontSize")  private var srcFontSize: Double = 18
     @AppStorage("ov_srcColorHex")  private var srcColorHex: String = "#CBD5E1"
-    @AppStorage("ov_lineSpacing")  private var lineSpacing: Double = 8
+    @AppStorage("ov_lineSpacing")  private var lineSpacing: Double = 8        // 단락(세그먼트) 사이 간격
+    @AppStorage("ov_textLineSpacing") private var textLineSpacing: Double = 2 // 줄 간격(한 문단 내 줄 높이)
     @AppStorage("ov_innerMargin")  private var innerMargin: Double = 20
     @AppStorage("ov_winOpacity")   private var winOpacity: Double = 1.0
 
@@ -302,12 +316,15 @@ struct OverlayContentView: View {
                                 ForEach(store.segments) { seg in
                                     overlayRow(seg).id(seg.id)
                                 }
-                                // 현재 진행 중 — 확정 자막과 동일한 색/크기 (글로서리 적용)
+                                // 현재 진행 중 — 카라오케(드립): 새 단어가 하나씩 등장 (글로서리 적용)
                                 if !store.currentTarget.isEmpty {
-                                    Text(glossary.normalize(store.currentTarget))
-                                        .font(.system(size: fontSize, weight: fontBold ? .bold : .regular))
-                                        .foregroundColor(Color(hex: fontColorHex))
-                                        .modifier(StrokeModifier(enabled: textStroke))
+                                    KaraokeCurrentLine(
+                                        text: glossary.normalize(store.currentTarget),
+                                        fontSize: fontSize,
+                                        bold: fontBold,
+                                        color: Color(hex: fontColorHex),
+                                        stroke: textStroke,
+                                        lineSpacing: CGFloat(textLineSpacing))
                                         .fixedSize(horizontal: false, vertical: true)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .padding(.horizontal, innerMargin)
@@ -370,16 +387,20 @@ struct OverlayContentView: View {
             }
             .padding(10)
 
-            // ── 설정 패널 ──
+            // ── 설정 패널 (창 높이를 넘으면 내부 스크롤; 창 크기는 그대로 유지) ──
             if uiState.settingsOpen {
-                settingsPanel
-                    .frame(width: 320)
-                    .background(.ultraThinMaterial)
-                    .cornerRadius(12)
-                    .shadow(radius: 10)
-                    .padding(10)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-                    .animation(.easeInOut(duration: 0.2), value: uiState.settingsOpen)
+                ScrollView {
+                    settingsPanel
+                }
+                .scrollIndicators(.visible)   // 스크롤 막대 항상 표시
+                .frame(width: 320)
+                .frame(maxHeight: .infinity)
+                .background(.ultraThinMaterial)
+                .cornerRadius(12)
+                .shadow(radius: 10)
+                .padding(10)
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+                .animation(.easeInOut(duration: 0.2), value: uiState.settingsOpen)
             }
         }
         .opacity(winOpacity)
@@ -429,6 +450,7 @@ struct OverlayContentView: View {
                     .font(.system(size: fontSize, weight: fontBold ? .bold : .regular))
                     .foregroundColor(Color(hex: fontColorHex))
                     .modifier(StrokeModifier(enabled: textStroke))
+                    .lineSpacing(textLineSpacing)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, innerMargin)
@@ -499,6 +521,10 @@ struct OverlayContentView: View {
 
             // 레이아웃
             sRow("줄 간격") {
+                Slider(value: $textLineSpacing, in: 0...20, step: 1).frame(width: 120)
+                Text("\(Int(textLineSpacing))pt").frame(width: 34).font(.caption)
+            }
+            sRow("단락 간격") {
                 Slider(value: $lineSpacing, in: 0...30, step: 1).frame(width: 120)
                 Text("\(Int(lineSpacing))pt").frame(width: 34).font(.caption)
             }
@@ -598,5 +624,80 @@ extension Color {
             green: Double((n >> 8) & 0xFF) / 255,
             blue: Double(n & 0xFF) / 255
         )
+    }
+}
+
+// MARK: - 카라오케(드립) 현재 줄  [v1.8.0]
+// 진행 중 번역(currentTarget)을 단어 단위로 쪼개, 새로 들어온 단어가
+// 하나씩 왼쪽→오른쪽으로 슬라이드+페이드되며 등장한다. 줄바꿈은 KaraokeFlowLayout이 처리.
+// 단어 사이 공백/줄간격은 확정 자막(평범한 Text)과 동일하게 맞춰, 완료 시 간격이 변하지 않음.
+struct KaraokeCurrentLine: View {
+    let text: String
+    let fontSize: Double
+    let bold: Bool
+    let color: Color
+    let stroke: Bool
+    var lineSpacing: CGFloat = 0
+
+    private var words: [String] {
+        text.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+    }
+
+    var body: some View {
+        // spacing은 0으로 두고 각 단어에 실제 공백을 붙여 일반 Text와 동일한 간격 재현. 줄 높이만 lineSpacing 반영.
+        KaraokeFlowLayout(spacing: 0, lineSpacing: lineSpacing) {
+            ForEach(Array(words.enumerated()), id: \.offset) { _, word in
+                Text(word + " ")
+                    .font(.system(size: fontSize, weight: bold ? .bold : .regular))
+                    .foregroundColor(color)
+                    .modifier(StrokeModifier(enabled: stroke))
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .offset(x: -fontSize * 0.5)),
+                        removal: .opacity))
+            }
+        }
+        .animation(.easeOut(duration: 0.22), value: words.count)
+    }
+}
+
+// MARK: - 단어 흐름 레이아웃 (자동 줄바꿈)  [v1.8.0]
+// 단어 뷰들을 가로로 배치하다 폭을 넘으면 다음 줄로 내린다.
+// (프로젝트에 이미 있는 FlowLayout과 충돌을 피하려 별도 이름 사용)
+struct KaraokeFlowLayout: Layout {
+    var spacing: CGFloat = 6
+    var lineSpacing: CGFloat = 4
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0, lineHeight: CGFloat = 0, widest: CGFloat = 0
+        for sv in subviews {
+            let sz = sv.sizeThatFits(.unspecified)
+            if x + sz.width > maxWidth && x > 0 {
+                x = 0
+                y += lineHeight + lineSpacing
+                lineHeight = 0
+            }
+            x += sz.width + spacing
+            lineHeight = max(lineHeight, sz.height)
+            widest = max(widest, x - spacing)
+        }
+        let totalH = y + lineHeight
+        return CGSize(width: maxWidth == .infinity ? widest : maxWidth, height: totalH)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let maxWidth = bounds.width
+        var x: CGFloat = bounds.minX, y: CGFloat = bounds.minY, lineHeight: CGFloat = 0
+        for sv in subviews {
+            let sz = sv.sizeThatFits(.unspecified)
+            if x - bounds.minX + sz.width > maxWidth && x > bounds.minX {
+                x = bounds.minX
+                y += lineHeight + lineSpacing
+                lineHeight = 0
+            }
+            sv.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(sz))
+            x += sz.width + spacing
+            lineHeight = max(lineHeight, sz.height)
+        }
     }
 }
