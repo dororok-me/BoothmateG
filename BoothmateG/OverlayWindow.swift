@@ -2,8 +2,11 @@
 //  OverlayWindow.swift
 //  BoothmateG
 //
-//  Version: 1.15.0
+//  Version: 1.16.0
 //  Changelog:
+//    1.16.0 - 가장자리/코너 리사이즈 커서가 잘 안 바뀌던 문제 수정: tracking area에 .cursorUpdate 추가,
+//             커서 설정을 applyCursor()로 통합해 mouseMoved/cursorUpdate 양쪽에서 적용
+//             (비활성 창에서 mouseMoved가 잘 안 오던 문제 해결).
 //    1.15.0 - 진행 중(인식 중) 자막도 단어를 더블클릭하면 그 단어가 블록 선택된 채 바로 수정.
 //             (확정 자막과 동일한 EditableSubtitleText 방식. 더블클릭 순간 내부 확정 → 글자 튐 없음)
 //             편집 중에는 자동 스크롤 일시정지(isCurrentEditing).
@@ -171,8 +174,9 @@ class OverlayResizeHandle: NSView {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         for a in trackingAreas { removeTrackingArea(a) }
+        // v1.16.0: .cursorUpdate 추가 — 비활성 창에서도 가장자리 커서가 안정적으로 바뀌게.
         addTrackingArea(NSTrackingArea(rect: bounds,
-            options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            options: [.mouseMoved, .mouseEnteredAndExited, .cursorUpdate, .activeAlways, .inVisibleRect],
             owner: self))
     }
 
@@ -190,7 +194,11 @@ class OverlayResizeHandle: NSView {
     }
 
     override func mouseMoved(with event: NSEvent) {
-        let local = convert(event.locationInWindow, from: nil)
+        applyCursor(at: convert(event.locationInWindow, from: nil))
+    }
+
+    // v1.16.0: 커서 설정을 공통 메서드로. mouseMoved와 cursorUpdate 양쪽에서 호출.
+    private func applyCursor(at local: NSPoint) {
         switch edge(at: local) {
         case .left, .right:
             NSCursor.resizeLeftRight.set()
@@ -226,7 +234,10 @@ class OverlayResizeHandle: NSView {
         return fallback
     }
     override func mouseExited(with event: NSEvent) { NSCursor.arrow.set() }
-    override func cursorUpdate(with event: NSEvent) { }
+    // v1.16.0: 시스템이 커서 갱신을 요청할 때(비활성 창에서도 호출됨)도 동일하게 적용.
+    override func cursorUpdate(with event: NSEvent) {
+        applyCursor(at: convert(event.locationInWindow, from: nil))
+    }
 
     override func mouseDown(with event: NSEvent) {
         guard let win = self.window else { return }
