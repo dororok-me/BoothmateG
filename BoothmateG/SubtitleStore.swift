@@ -2,12 +2,13 @@
 //  SubtitleStore.swift
 //  BoothmateG
 //
-//  Version: 1.5.0
+//  Version: 1.6.0
 //  Changelog:
 //    1.1.0 - turnComplete 기반 (Gemini가 turnComplete를 거의 안 보내서 실패)
 //    1.2.0 - 번역 텍스트의 마침표(.?!) 도착 시 자동으로 segment 확정
 //    1.3.0 - updateSource() 추가 (원문 줄도 수정 가능)
 //    1.4.0 - 번역 진행 줄 맨 앞 공백 제거 (한 칸 들여쓰기처럼 보이는 현상 방지)
+//    1.6.0 - onSegmentCommitted 콜백 추가(문장 확정 시 번역 텍스트 전달, Fish TTS용).
 //    1.5.0 - commitCurrentForEditing(): 진행 중(회색) 자막을 즉시 확정하고 id 반환
 //            (메인 콘솔에서 진행 중 자막 단어를 더블클릭해 수정할 때 사용)
 //
@@ -71,7 +72,12 @@ final class SubtitleStore: ObservableObject {
         ))
         currentSource = ""
         currentTarget = ""
+        // v1.6.0: 문장이 확정될 때마다 확정된 번역 텍스트를 콜백 (Fish TTS 송출용)
+        onSegmentCommitted?(target)
     }
+
+    // v1.6.0: 새 문장(세그먼트)이 확정될 때 호출되는 콜백. 인자 = 확정된 번역 텍스트.
+    var onSegmentCommitted: ((String) -> Void)? = nil
 
     // 번역(target) 줄 수정
     func updateTarget(id: UUID, newText: String) {

@@ -2,7 +2,7 @@
 //  ContentView.swift
 //  BoothmateG
 //
-//  Version: 2.48.0
+//  Version: 2.53.0
 //  Changelog:
 //    2.31.0 - 다국어 화자를 단일 소스와 분리(multiSourceLang). 헤더에 화자 선택 picker.
 //    2.32.0 - 청중 송출: QR 세션 선택 + 송출 토글. 자막을 FirebaseRelay로 실시간 송출.
@@ -38,6 +38,17 @@
 //             (MultiSubtitleStore.updateTarget/commitCurrentForEditing 필요)
 //    2.48.0 - 다국어 문장 확정 기준을 한국어로 설정(startMulti에서 sourceIsKorean 전달).
 //             다국어 콘솔이 한국어 문장 단위로 끊겨 누적되지 않음.
+//    2.49.0 - Fish Audio TTS 연결: 지정 언어 1개만 Fish 음성, 나머지는 Gemini.
+//             Fish 언어는 Gemini 음성을 청중 송출에서 제외하고, 자막 텍스트를 Fish로 보내 클립 생성.
+//    2.50.0 - Fish 호출을 turnComplete 대신 '문장 확정 콜백'(onSegmentCommitted)으로 변경.
+//             Gemini가 turnComplete를 거의 안 보내 Fish가 호출 안 되던 문제 수정. 진단 로그 추가.
+//    2.51.0 - 자동 중지 무음 판정 RMS 기준 500→50. 외부 오디오 인터페이스의 낮은 입력 레벨에서
+//             발화 중에도 무음으로 오판해 중지되던 문제 수정.
+//    2.52.0 - 정지 시 크래시 방지: 정지 시작 시 Fish 콜백(onSegmentCommitted) 먼저 차단,
+//             Fish 합성 콜백은 메인에서 active 재확인 후에만 업로드(정지 후 늦은 도착 무시).
+//
+//    2.53.0 - 정지 시 다운(5분+ 누적 후) 대응: 전사문 파일 저장을 백그라운드로(메인 멈춤 방지),
+//             콘솔은 최근 80개 세그먼트만 렌더(자막 누적 시 렌더 부하/스크롤 끊김 완화). 생성시간 로그.
 //
 
 import SwiftUI
@@ -424,7 +435,8 @@ struct ContentView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     // 확정된 세그먼트: 원문 + 각 언어 번역
-                    ForEach(multiStore.segments) { seg in
+                    // v2.53.0: 최근 80개만 렌더(성능). 전체 기록은 전사문에 저장됨.
+                    ForEach(multiStore.segments.suffix(80)) { seg in
                         multiSegmentRow(seg)
                     }
                     // 진행 중(회색) 자막: 원문 + 각 언어 번역
@@ -538,7 +550,9 @@ struct ContentView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(subtitles.segments) { segment in segmentRow(segment) }
+                    // v2.53.0: 최근 80개만 렌더(자막이 많이 쌓여도 화면이 무거워지지 않게).
+                    //          전체 기록은 전사문에 저장됨.
+                    ForEach(subtitles.segments.suffix(80)) { segment in segmentRow(segment) }
                     currentProgressView
                 }
                 .padding(.vertical, 8)
@@ -789,6 +803,43 @@ struct ContentView: View {
         for lang in audienceLangs { relayMulti(lang) }
     }
 
+    // ───────────── Fish Audio TTS (v2.49.0) ─────────────
+    // 특정 언어 1개만 Fish 음성으로 송출, 나머지는 Gemini. Fish는 자막(번역 텍스트)만 읽음.
+
+    // 해당 언어가 Fish 송출 대상인지
+    private func isFishLang(_ lang: String) -> Bool {
+        settings.fishEnabled && !settings.fishLang.isEmpty && lang == settings.fishLang
+    }
+
+    // 확정된 번역 텍스트를 Fish TTS로 보내 음성 클립을 청중에게 송출
+    // v2.50.0: turnComplete 대신 '문장 확정 콜백'에서 호출 (Gemini가 turnComplete를 거의 안 보냄)
+    private func sendTextToFish(lang: String, text: String) {
+        guard relay.active, settings.fishEnabled, !settings.fishApiKey.isEmpty else { return }
+        let trimmed = glossary.normalize(text).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let config = FishAudioTTS.Config(
+            apiKey: settings.fishApiKey,
+            referenceId: settings.fishReferenceId,
+            model: settings.fishModel,
+            sampleRate: 24000
+        )
+        print("[BMG][Fish] 합성 요청: \(lang) \"\(trimmed.prefix(20))...\"")
+        FishAudioTTS.synthesize(text: trimmed, config: config) { pcm in
+            guard let pcm = pcm else { print("[BMG][Fish] 합성 실패"); return }
+            // v2.52.0: 정지 후 늦게 도착한 콜백은 무시 (정지 중 pushClip 충돌 방지).
+            //          콜백은 백그라운드 스레드이므로 메인에서 상태 재확인.
+            DispatchQueue.main.async {
+                guard self.relay.active, (self.isRunning || self.isMultiRunning) else {
+                    print("[BMG][Fish] 정지됨 → 업로드 건너뜀")
+                    return
+                }
+                print("[BMG][Fish] 합성 성공: \(pcm.count) bytes → 업로드")
+                self.audioBroadcaster.pushClip(lang: lang, pcm16: pcm)
+            }
+        }
+    }
+
     private func swapLanguages() {
         let s = settings.sourceLang
         settings.sourceLang = settings.targetLang
@@ -812,13 +863,29 @@ struct ContentView: View {
         statusMessage = "연결 중..."
 
         client.onConnected = { DispatchQueue.main.async { self.statusMessage = "✅ 연결됨" } }
+        // v2.50.0: 문장이 확정될 때마다 Fish 언어면 그 텍스트를 Fish로 송출
+        subtitles.onSegmentCommitted = { target in
+            if self.isFishLang(self.settings.targetLang) {
+                self.sendTextToFish(lang: self.settings.targetLang, text: target)
+            }
+        }
         client.onInputTranscript = { t in DispatchQueue.main.async { self.subtitles.appendSource(t) } }
         client.onOutputTranscript = { t in DispatchQueue.main.async { self.subtitles.appendTarget(t); self.relaySingle() } }
         client.onAudio = { [audioPlayer] d in
                     audioPlayer.enqueue(pcm16: d)
-                    self.audioBroadcaster.append(lang: self.settings.targetLang, pcm16: d)
+                    // v2.49.0: Fish 대상 언어면 Gemini 음성을 청중 송출에서 제외(Fish로 대체)
+                    if !self.isFishLang(self.settings.targetLang) {
+                        self.audioBroadcaster.append(lang: self.settings.targetLang, pcm16: d)
+                    }
                 }
-        client.onTurnComplete = { DispatchQueue.main.async { self.subtitles.finalizeTurn(); self.relaySingle(); self.audioBroadcaster.flushBoundary() } }
+        client.onTurnComplete = { DispatchQueue.main.async {
+            self.subtitles.finalizeTurn()
+            self.relaySingle()
+            // Fish 언어가 아니면 Gemini 누적분 마감 (Fish 언어는 문장 확정 콜백에서 처리)
+            if !self.isFishLang(self.settings.targetLang) {
+                self.audioBroadcaster.flushBoundary()
+            }
+        } }
         client.onError = { m in DispatchQueue.main.async { self.statusMessage = "❌ \(m)" } }
         client.onClosed = {
             DispatchQueue.main.async { if self.isRunning { self.statusMessage = "연결 종료됨" } }
@@ -843,11 +910,22 @@ struct ContentView: View {
     }
 
     private func stop() {
+        // v2.52.0: 정지 시작 시 Fish 콜백 먼저 끊기 (finalizeTurn이 새 Fish 호출을 트리거하지 않게)
+        subtitles.onSegmentCommitted = nil
+        isRunning = false
         // v2.39.0: 저장 직전, 아직 확정 안 된 진행 중 자막을 강제 확정 (전사문 누락 방지)
         subtitles.finalizeTurn()
         // 내용이 있을 때만 저장 (헤더만 있는 빈 전사문 방지)
+        // v2.53.0: 전사문 생성 시간 측정 + 파일 저장은 백그라운드로(메인 스레드 멈춤 방지)
         if hasAnyTranscriptContent() {
-            TranscriptArchive.autoSave(transcriptText(started: sessionStart), started: sessionStart)
+            let t0 = Date()
+            let text = transcriptText(started: sessionStart)
+            let dt = Date().timeIntervalSince(t0)
+            print("[BMG] 전사문 생성 \(String(format: "%.2f", dt))초, \(subtitles.segments.count)개 세그먼트")
+            let started = sessionStart
+            DispatchQueue.global(qos: .utility).async {
+                TranscriptArchive.autoSave(text, started: started)
+            }
         }
         audio.stop()
         client.disconnect()
@@ -855,7 +933,6 @@ struct ContentView: View {
         relay.stopBroadcast()
         audioBroadcaster.stop()
         overlayController.hide()      // v2.42.0: 중지 시 오버레이 창도 닫기
-        isRunning = false
         stopAudioTimeout()            // v2.36.0
         sessionStart = nil
         statusMessage = "정지됨"
@@ -885,13 +962,28 @@ struct ContentView: View {
         multiClient.onConnected = {
             DispatchQueue.main.async { self.statusMessage = "✅ 다국어 연결됨 (\(self.audienceLangs.count)개)" }
         }
+        // v2.50.0: 문장이 확정될 때마다 Fish 언어가 청중 언어에 있으면 그 언어 번역을 Fish로 송출
+        multiStore.onSegmentCommitted = { targets in
+            guard self.settings.fishEnabled, !self.settings.fishLang.isEmpty else { return }
+            let fl = self.settings.fishLang
+            if self.audienceLangs.contains(fl), let t = targets[fl], !t.isEmpty {
+                self.sendTextToFish(lang: fl, text: t)
+            }
+        }
         multiClient.onSource = { t in DispatchQueue.main.async { self.multiStore.appendSource(t) } }
         multiClient.onTarget = { lang, t in DispatchQueue.main.async { self.multiStore.appendTarget(lang, t); self.relayMulti(lang) } }
         multiClient.onAudio = { [audioPlayer] lang, d in
                     if lang == self.settings.multiAudioLang { audioPlayer.enqueue(pcm16: d) }
-                    self.audioBroadcaster.append(lang: lang, pcm16: d)
+                    // v2.49.0: Fish 대상 언어면 Gemini 음성을 청중 송출에서 제외(Fish로 대체)
+                    if !self.isFishLang(lang) {
+                        self.audioBroadcaster.append(lang: lang, pcm16: d)
+                    }
                 }
-        multiClient.onTurnComplete = { DispatchQueue.main.async { self.multiStore.finalizeTurn(); self.relayMultiAll(); self.audioBroadcaster.flushBoundary() } }
+        multiClient.onTurnComplete = { DispatchQueue.main.async {
+            self.multiStore.finalizeTurn()
+            self.relayMultiAll()
+            self.audioBroadcaster.flushBoundary()
+        } }
         multiClient.onError = { m in DispatchQueue.main.async { self.statusMessage = "❌ \(m)" } }
 
         audio.onAudioData = { [multiClient] d in multiClient.sendAudio(d) }
@@ -914,11 +1006,22 @@ struct ContentView: View {
     }
 
     private func stopMulti() {
+        // v2.52.0: 정지 시작 시 Fish 콜백 먼저 끊기
+        multiStore.onSegmentCommitted = nil
+        isMultiRunning = false
         // v2.39.0: 저장 직전, 아직 확정 안 된 진행 중 자막을 강제 확정 (전사문 누락 방지)
         multiStore.finalizeTurn()
         // 내용이 있을 때만 저장 (헤더만 있는 빈 전사문 방지)
+        // v2.53.0: 전사문 생성 시간 측정 + 파일 저장은 백그라운드로
         if hasAnyTranscriptContent() {
-            TranscriptArchive.autoSave(transcriptText(started: multiSessionStart), started: multiSessionStart)
+            let t0 = Date()
+            let text = transcriptText(started: multiSessionStart)
+            let dt = Date().timeIntervalSince(t0)
+            print("[BMG] 전사문 생성 \(String(format: "%.2f", dt))초, \(multiStore.segments.count)개 세그먼트")
+            let started = multiSessionStart
+            DispatchQueue.global(qos: .utility).async {
+                TranscriptArchive.autoSave(text, started: started)
+            }
         }
         audio.stop()
         multiClient.disconnect()
@@ -926,7 +1029,6 @@ struct ContentView: View {
         relay.stopBroadcast()
         audioBroadcaster.stop()
         multiOverlay.hide()           // v2.42.0: 중지 시 다국어 오버레이 창도 닫기
-        isMultiRunning = false
         stopAudioTimeout()            // v2.36.0
         multiSessionStart = nil
         statusMessage = "정지됨"
@@ -938,7 +1040,10 @@ struct ContentView: View {
         guard settings.secondsWithoutAudio > 0 else { return }
         audioTimeoutTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
             guard self.isRunning || self.isMultiRunning else { return }
-            if let rms = self.lastAudioRMS, rms < 500 {
+            // v2.51.0: 무음 판정 기준 500 → 50. 외부 오디오 인터페이스는 입력 레벨이 낮게
+            //          들어와 발화 중에도 RMS가 500 미만인 경우가 많아 오작동하던 문제 수정.
+            //          진짜 무음은 RMS 한 자리수~십 단위라 50이면 발화와 잘 구분됨.
+            if let rms = self.lastAudioRMS, rms < 50 {
                 self.audioSilenceTime += 0.5
             } else {
                 self.audioSilenceTime = 0

@@ -2,13 +2,14 @@
 //  MultiSubtitleStore.swift
 //  BoothmateG
 //
-//  Version: 1.4.0
+//  Version: 1.5.0
 //  Changelog:
 //    1.0.0 - 최초 작성. 화자 원문 + 여러 언어 번역을 함께 보관.
 //    1.1.0 - 번역 진행 줄 맨 앞 공백 제거 (한 칸 들여쓰기처럼 보이는 현상 방지)
 //    1.2.0 - updateTarget(id,lang,newText)/updateSource(id,newText)/commitCurrentForEditing() 추가
 //            (다국어 메인 콘솔 단어 더블클릭 수정용)
 //    1.3.0 - 원문 기준 문장 자동 확정(모든 언어 도착 조건) — 실시간 타이밍상 확정이 잘 안 돼 폐기.
+//    1.5.0 - onSegmentCommitted 콜백 추가(문장 확정 시 언어별 번역 전달, Fish TTS용).
 //    1.4.0 - 한국어 기준 문장 자동 확정으로 변경. 한국어(원문 또는 ko 번역)에 문장 끝(.?!)이 오면
 //            그 시점의 원문+모든 언어를 한 세그먼트로 확정. sourceIsKorean으로 화자 한국어 여부 전달.
 //
@@ -129,5 +130,10 @@ final class MultiSubtitleStore: ObservableObject {
         currentSource = ""
         currentTargets = [:]
         if segments.count > 200 { segments.removeFirst(segments.count - 200) }
+        // v1.5.0: 문장이 확정될 때마다 확정된 세그먼트(언어별 번역 묶음)를 콜백 (Fish TTS 송출용)
+        onSegmentCommitted?(cleaned)
     }
+
+    // v1.5.0: 새 문장(세그먼트)이 확정될 때 호출되는 콜백. 인자 = 언어별 번역 딕셔너리.
+    var onSegmentCommitted: (([String: String]) -> Void)? = nil
 }

@@ -2,13 +2,15 @@
 //  AppSettings.swift
 //  BoothmateG
 //
-//  Version: 1.6.0
+//  Version: 1.7.0
 //  Changelog:
 //    1.2.0 - 지원 언어 전체 + BCP-47 코드
 //    1.3.0 - 청중 언어(다국어 모드 타겟들) 저장 추가
 //    1.4.0 - 다국어 모드에서 음성 재생할 언어 1개 저장(multiAudioLang) 추가
 //    1.5.0 - 다국어 모드 화자 언어(multiSourceLang)를 단일 소스와 독립 저장.
 //    1.6.0 - 음성 입력 없을 때 자동 중지 옵션 추가(secondsWithoutAudio: 0/60/180/300/600)
+//    1.7.0 - Fish Audio TTS 설정 추가(fishApiKey/fishEnabled/fishLang/fishReferenceId/fishModel).
+//            특정 언어 1개만 Fish 음성, 나머지는 Gemini 기본 음성.
 //
 
 import SwiftUI
@@ -37,6 +39,13 @@ final class AppSettings: ObservableObject {
     // v1.6.0 추가: 음성 입력이 없을 때 자동 중지 시간 (초)
     // 0 = 비활성화, 60 = 1분, 180 = 3분, 300 = 5분, 600 = 10분
     @AppStorage("secondsWithoutAudio") var secondsWithoutAudio: Int = 0
+
+    // v1.7.0 추가: Fish Audio TTS (특정 언어 1개만 Fish 음성으로, 나머지는 Gemini 기본 음성)
+    @AppStorage("fishApiKey") var fishApiKey: String = ""        // Fish Audio API 키
+    @AppStorage("fishEnabled") var fishEnabled: Bool = false     // Fish 음성 사용 여부
+    @AppStorage("fishLang") var fishLang: String = ""            // Fish로 내보낼 언어 1개 (빈 값 = 끄기)
+    @AppStorage("fishReferenceId") var fishReferenceId: String = ""  // Fish 음성 모델 ID (빈 값 = 기본 음성)
+    @AppStorage("fishModel") var fishModel: String = "s1"        // Fish 모델 (s1 / s2-pro)
 
     func loadGlossary() -> [GlossaryItem] {
         guard let data = glossaryJSON.data(using: .utf8),

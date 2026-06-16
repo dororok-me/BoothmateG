@@ -2,7 +2,7 @@
 //  FirebaseRelay.swift
 //  BoothmateG
 //
-//  2.3.0 - 행사 로고 업로드(uploadLogo) 추가 → 청중 페이지 헤더에 표시
+//  Version: 2.4.0
 //  Changelog:
 //    1.0.0 - 최초 작성. RTDB REST로 자막 실시간 송출.
 //    1.1.0 - deleteSession 추가 (행사 종료 시 RTDB 세션 데이터 삭제).
@@ -13,6 +13,8 @@
 //    2.3.0 - uploadLogo 추가: 행사 로고를 Storage(audio/{sid}/logo.ext)에 올리고
 //            meta.logoUrl을 PATCH → 청중 페이지가 행사명 왼쪽에 로고 표시.
 //            startBroadcast에 logoPath 파라미터(기본값 "") 추가.
+//    2.4.0 - startBroadcast 시작 시 이전 라이브 자막·음성(live/audioLive) 자동 삭제.
+//            같은 세션으로 다시 송출해도 청중 폰에 지난 자막이 남지 않음.
 //
 
 import Foundation
@@ -165,6 +167,9 @@ final class FirebaseRelay: ObservableObject {
         self.sessionId = sessionId
         self.active = true
         latest.removeAll(); lastSent.removeAll(); scheduled.removeAll()
+        // v2.4.0: 송출 시작 시 이전 라이브 자막·음성을 먼저 삭제 → 청중 폰에 지난 자막이 남지 않음
+        send("DELETE", "sessions/\(sessionId)/live", nil)
+        send("DELETE", "sessions/\(sessionId)/audioLive", nil)
         let meta: [String: Any] = [
             "eventName": eventName,
             "sessionName": sessionName,

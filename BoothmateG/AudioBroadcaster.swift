@@ -2,7 +2,11 @@
 //  AudioBroadcaster.swift
 //  BoothmateG
 //
-//  Version: 1.1.0 - reset 추가
+//  Version: 1.2.0
+//  Changelog:
+//    1.0.0 - 최초.
+//    1.1.0 - reset 추가.
+//    1.2.0 - pushClip(lang,pcm16) 추가: 외부(Fish Audio TTS)에서 만든 완성 PCM을 한 클립으로 즉시 업로드.
 //  다국어 청중 음성 송출(2단계, v1 = 무압축 WAV).
 //  Gemini가 언어별로 주는 PCM16(24kHz·모노)을 받아 → 무음 구간마다 한 문장 클립으로 잘라
 //  → FirebaseRelay를 통해 Storage에 올리고 → RTDB로 "새 클립" 알림을 push 한다.
@@ -80,6 +84,19 @@ final class AudioBroadcaster {
                 for lang in Array(self.buffers.keys) { self.flush(lang) }
             }
         }
+
+    // v1.2.0 추가: 외부(Fish Audio TTS 등)에서 만든 '완성된 PCM16'을 한 클립으로 즉시 업로드.
+    // 누적(append)과 달리, 이미 한 문장 분량의 완성 음성이므로 바로 WAV로 만들어 보낸다.
+    // 해당 언어의 Gemini 누적 버퍼는 쓰지 않는다(Fish 언어는 onAudio에서 append를 건너뛰므로 비어 있음).
+    func pushClip(lang: String, pcm16: Data) {
+        q.async {
+            guard self.active, !lang.isEmpty, pcm16.count >= self.minBytes else { return }
+            let n = (self.seq[lang] ?? 0) + 1
+            self.seq[lang] = n
+            let wav = Self.makeWAV(pcm: pcm16, sampleRate: self.sampleRate)
+            FirebaseRelay.shared.uploadAudioClip(sessionId: self.sessionId, lang: lang, seq: n, wav: wav)
+        }
+    }
 
     // MARK: - 내부
 
