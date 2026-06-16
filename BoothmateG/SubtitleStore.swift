@@ -2,12 +2,14 @@
 //  SubtitleStore.swift
 //  BoothmateG
 //
-//  Version: 1.4.0
+//  Version: 1.5.0
 //  Changelog:
 //    1.1.0 - turnComplete 기반 (Gemini가 turnComplete를 거의 안 보내서 실패)
 //    1.2.0 - 번역 텍스트의 마침표(.?!) 도착 시 자동으로 segment 확정
 //    1.3.0 - updateSource() 추가 (원문 줄도 수정 가능)
 //    1.4.0 - 번역 진행 줄 맨 앞 공백 제거 (한 칸 들여쓰기처럼 보이는 현상 방지)
+//    1.5.0 - commitCurrentForEditing(): 진행 중(회색) 자막을 즉시 확정하고 id 반환
+//            (메인 콘솔에서 진행 중 자막 단어를 더블클릭해 수정할 때 사용)
 //
 
 import Foundation
@@ -87,5 +89,20 @@ final class SubtitleStore: ObservableObject {
         segments.removeAll()
         currentSource = ""
         currentTarget = ""
+    }
+
+    // v1.5.0 추가: 현재 진행 중인 자막을 즉시 확정하고 그 세그먼트 id를 반환.
+    // (메인 콘솔에서 진행 중 자막을 더블클릭해 수정할 때 사용 — 한쪽만 있어도 확정)
+    // 반환값: 새로 만든 세그먼트의 id (확정할 내용이 없으면 nil)
+    func commitCurrentForEditing() -> UUID? {
+        let source = currentSource.trimmingCharacters(in: .whitespacesAndNewlines)
+        let target = currentTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !source.isEmpty || !target.isEmpty else { return nil }
+
+        let seg = SubtitleSegment(sourceText: source, targetText: target)
+        segments.append(seg)
+        currentSource = ""
+        currentTarget = ""
+        return seg.id
     }
 }

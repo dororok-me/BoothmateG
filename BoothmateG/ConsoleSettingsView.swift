@@ -2,11 +2,12 @@
 //  ConsoleSettingsView.swift
 //  BoothmateG
 //
-//  Version: 1.2.0
+//  Version: 1.3.0
 //  Changelog:
 //    1.0.0 - 최초 작성. 글자 크기 + 야간 모드
 //    1.1.0 - 맨 아래에 Gemini API 키 입력 추가 (메인 콘솔에서 이관)
 //    1.2.0 - 전사문 섹션 추가: 자동 저장 안내 + 내보내기/저장 폴더 열기 버튼
+//    1.3.0 - 음성 입력 자동 중지 옵션 추가(secondsWithoutAudio: 끄기/1/3/5/10분).
 //
 
 import SwiftUI
@@ -77,6 +78,28 @@ struct ConsoleSettingsView: View {
             }
             .toggleStyle(.switch)
 
+            Divider()
+
+            // ── 음성 입력 자동 중지 (v1.3.0) ──
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "pause.circle")
+                    Text("무음 시 자동 중지").font(.subheadline.weight(.semibold))
+                }
+                Picker("", selection: $settings.secondsWithoutAudio) {
+                    Text("끄기").tag(0)
+                    Text("1분").tag(60)
+                    Text("3분").tag(180)
+                    Text("5분").tag(300)
+                    Text("10분").tag(600)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                Text("음성 입력이 설정한 시간 동안 없으면 통역을 자동으로 멈춰요.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             // ── 미리보기 ──
             VStack(alignment: .leading, spacing: 4) {
                 Text("미리보기").font(.caption).foregroundStyle(.secondary)
@@ -134,7 +157,7 @@ struct ConsoleSettingsView: View {
                 .frame(maxWidth: .infinity)
         }
         .padding(20)
-        .frame(width: 460, height: 600)
+        .frame(width: 460, height: 680)
         .preferredColorScheme(night ? .dark : nil)
     }
 }

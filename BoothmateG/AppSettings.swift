@@ -2,12 +2,13 @@
 //  AppSettings.swift
 //  BoothmateG
 //
-//  Version: 1.5.0
+//  Version: 1.6.0
 //  Changelog:
 //    1.2.0 - 지원 언어 전체 + BCP-47 코드
 //    1.3.0 - 청중 언어(다국어 모드 타겟들) 저장 추가
 //    1.4.0 - 다국어 모드에서 음성 재생할 언어 1개 저장(multiAudioLang) 추가
 //    1.5.0 - 다국어 모드 화자 언어(multiSourceLang)를 단일 소스와 독립 저장.
+//    1.6.0 - 음성 입력 없을 때 자동 중지 옵션 추가(secondsWithoutAudio: 0/60/180/300/600)
 //
 
 import SwiftUI
@@ -32,6 +33,10 @@ final class AppSettings: ObservableObject {
 
     // 다국어 모드: 청중 언어 목록 (기본: 영어/중국어 간체/일본어)
     @AppStorage("audienceLangsJSON") var audienceLangsJSON: String = "[\"en\",\"zh-Hans\",\"ja\"]"
+
+    // v1.6.0 추가: 음성 입력이 없을 때 자동 중지 시간 (초)
+    // 0 = 비활성화, 60 = 1분, 180 = 3분, 300 = 5분, 600 = 10분
+    @AppStorage("secondsWithoutAudio") var secondsWithoutAudio: Int = 0
 
     func loadGlossary() -> [GlossaryItem] {
         guard let data = glossaryJSON.data(using: .utf8),

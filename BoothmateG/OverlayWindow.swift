@@ -2,8 +2,15 @@
 //  OverlayWindow.swift
 //  BoothmateG
 //
-//  Version: 1.10.0
+//  Version: 1.15.0
 //  Changelog:
+//    1.15.0 - 진행 중(인식 중) 자막도 단어를 더블클릭하면 그 단어가 블록 선택된 채 바로 수정.
+//             (확정 자막과 동일한 EditableSubtitleText 방식. 더블클릭 순간 내부 확정 → 글자 튐 없음)
+//             편집 중에는 자동 스크롤 일시정지(isCurrentEditing).
+//    1.13.0 - 가장자리 리사이즈 영역 35→6pt로 축소(상단 버튼 침범 방지), 코너만 14pt 고정.
+//    1.12.0 - 코너 리사이즈 커서를 진짜 대각선(↖↘ / ↗↙)으로 표시(시스템 커서 사용, 폴백 포함).
+//             코너 감지 영역을 가장자리 두께의 1.6배로 넓혀 꺾인 곳에서 잘 잡히게 함.
+//    1.11.0 - 가장자리 리사이즈 감지 영역 20→35pt 확대, 코너 커서 좌우/상하로 구분.
 //    1.10.0 - 설정 패널 스크롤 막대 항상 표시(.scrollIndicators(.visible)).
 //             설정 열렸을 때 hitTest 통과를 가장자리 리사이즈보다 우선 → 창 어디든
 //             패널 바깥 클릭 시 설정이 확실히 닫히도록 수정.
@@ -150,7 +157,7 @@ final class OverlayWindowController {
 // MARK: - Resize / Drag Handle
 
 class OverlayResizeHandle: NSView {
-    private let edgeThreshold: CGFloat = 20
+    private let edgeThreshold: CGFloat = 6
     // SwiftUI로 클릭을 통과시킬지 판정 (버튼/설정 패널 영역). 컨트롤러가 주입.
     var shouldPassThrough: ((NSPoint, NSRect) -> Bool)?
     private enum Edge { case none, left, right, top, bottom, topLeft, topRight, bottomLeft, bottomRight }
@@ -171,9 +178,12 @@ class OverlayResizeHandle: NSView {
 
     private func edge(at p: NSPoint) -> Edge {
         let t = edgeThreshold, w = bounds.width, h = bounds.height
+        // 코너는 가장자리보다 약간 넓게(14pt) → 꺾인 곳에서 대각선 커서가 잡히되, 버튼 영역은 침범 안 함
+        let ct: CGFloat = 14
         let l = p.x < t, r = p.x > w - t, b = p.y < t, tp = p.y > h - t
-        if tp && l { return .topLeft }; if tp && r { return .topRight }
-        if b && l { return .bottomLeft }; if b && r { return .bottomRight }
+        let cl = p.x < ct, cr = p.x > w - ct, cb = p.y < ct, ctp = p.y > h - ct
+        if ctp && cl { return .topLeft }; if ctp && cr { return .topRight }
+        if cb && cl { return .bottomLeft }; if cb && cr { return .bottomRight }
         if l { return .left }; if r { return .right }
         if tp { return .top }; if b { return .bottom }
         return .none
@@ -182,11 +192,38 @@ class OverlayResizeHandle: NSView {
     override func mouseMoved(with event: NSEvent) {
         let local = convert(event.locationInWindow, from: nil)
         switch edge(at: local) {
-        case .left, .right: NSCursor.resizeLeftRight.set()
-        case .top, .bottom: NSCursor.resizeUpDown.set()
-        case .topLeft, .topRight, .bottomLeft, .bottomRight: NSCursor.crosshair.set()
-        case .none: NSCursor.arrow.set()
+        case .left, .right:
+            NSCursor.resizeLeftRight.set()
+        case .top, .bottom:
+            NSCursor.resizeUpDown.set()
+        case .topLeft, .bottomRight:
+            // ↖↘ 대각선 (없으면 좌우 커서로 폴백)
+            OverlayResizeHandle.diagonalNWSE.set()
+        case .topRight, .bottomLeft:
+            // ↗↙ 대각선 (없으면 상하 커서로 폴백)
+            OverlayResizeHandle.diagonalNESW.set()
+        case .none:
+            NSCursor.arrow.set()
         }
+    }
+
+    // ── 대각선 리사이즈 커서 (macOS 시스템 커서 사용; 실패 시 폴백) ──
+    // 공개 API에는 대각선 커서가 없어 시스템 프레임워크의 비공개 셀렉터를 안전하게 시도한다.
+    // 다국어 오버레이(.resizable 기본 창)는 OS가 자동으로 이 커서를 보여주므로, 단일 창도 동일하게 맞춤.
+    static let diagonalNWSE: NSCursor = makeDiagonalCursor(
+        selector: "_windowResizeNorthWestSouthEastCursor",
+        fallback: NSCursor.resizeLeftRight)
+    static let diagonalNESW: NSCursor = makeDiagonalCursor(
+        selector: "_windowResizeNorthEastSouthWestCursor",
+        fallback: NSCursor.resizeUpDown)
+
+    private static func makeDiagonalCursor(selector name: String, fallback: NSCursor) -> NSCursor {
+        let sel = NSSelectorFromString(name)
+        if NSCursor.responds(to: sel),
+           let obj = NSCursor.perform(sel)?.takeUnretainedValue() as? NSCursor {
+            return obj
+        }
+        return fallback
     }
     override func mouseExited(with event: NSEvent) { NSCursor.arrow.set() }
     override func cursorUpdate(with event: NSEvent) { }
@@ -290,6 +327,8 @@ struct OverlayContentView: View {
 
     @State private var editingID: UUID? = nil
     @State private var editText: String = ""
+    @State private var isCurrentEditing: Bool = false   // v1.15.0: 진행 중 자막 편집 중 여부
+    @State private var committedEditID: UUID? = nil      // v1.15.0: 더블클릭 순간 확정된 세그먼트 id
 
     private var isOBS: Bool { bgMode == "obs" }
 
@@ -316,19 +355,38 @@ struct OverlayContentView: View {
                                 ForEach(store.segments) { seg in
                                     overlayRow(seg).id(seg.id)
                                 }
-                                // 현재 진행 중 — 카라오케(드립): 새 단어가 하나씩 등장 (글로서리 적용)
+                                // 현재 진행 중 자막 (글로서리 적용)
+                                // v1.15.0: 진행 중 자막도 단어를 더블클릭하면 그 단어가 블록 선택된 채
+                                //          바로 수정 가능(확정 자막과 동일). 더블클릭 순간 내부적으로 확정시켜
+                                //          이후 글자 늘어남이 수정창에 영향 없게 함.
                                 if !store.currentTarget.isEmpty {
-                                    KaraokeCurrentLine(
+                                    EditableSubtitleText(
                                         text: glossary.normalize(store.currentTarget),
                                         fontSize: fontSize,
                                         bold: fontBold,
                                         color: Color(hex: fontColorHex),
-                                        stroke: textStroke,
-                                        lineSpacing: CGFloat(textLineSpacing))
-                                        .fixedSize(horizontal: false, vertical: true)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .padding(.horizontal, innerMargin)
-                                        .id("ov_current")
+                                        isEditing: $isCurrentEditing,
+                                        onCommit: { newText in
+                                            // 더블클릭 순간 확정해 둔 세그먼트에 수정 내용 반영
+                                            if let id = committedEditID {
+                                                store.updateTarget(id: id, newText: newText)
+                                            }
+                                            committedEditID = nil
+                                        },
+                                        onBeginEdit: {
+                                            // 더블클릭하는 순간 진행 중 자막을 확정 → 글자 늘어남 멈춤.
+                                            // 팝오버가 먼저 뜨도록 다음 런루프에서 확정(뷰 사라짐으로 인한 팝오버 닫힘 방지).
+                                            DispatchQueue.main.async {
+                                                committedEditID = store.commitCurrentForEditing()
+                                            }
+                                        }
+                                    )
+                                    .modifier(StrokeModifier(enabled: textStroke))
+                                    .lineSpacing(textLineSpacing)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, innerMargin)
+                                    .id("ov_current")
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -341,10 +399,10 @@ struct OverlayContentView: View {
                     }
                     .clipped()
                     .onChange(of: store.segments.count) { _, _ in
-                        withAnimation { proxy.scrollTo("ov_current", anchor: .bottom) }
+                        if !isCurrentEditing { withAnimation { proxy.scrollTo("ov_current", anchor: .bottom) } }
                     }
                     .onChange(of: store.currentTarget) { _, _ in
-                        proxy.scrollTo("ov_current", anchor: .bottom)
+                        if !isCurrentEditing { proxy.scrollTo("ov_current", anchor: .bottom) }
                     }
                 }
             }

@@ -2,7 +2,7 @@
 //  ContentView.swift
 //  BoothmateG
 //
-//  Version: 2.35.0
+//  Version: 2.48.0
 //  Changelog:
 //    2.31.0 - 다국어 화자를 단일 소스와 분리(multiSourceLang). 헤더에 화자 선택 picker.
 //    2.32.0 - 청중 송출: QR 세션 선택 + 송출 토글. 자막을 FirebaseRelay로 실시간 송출.
@@ -10,6 +10,34 @@
 //    2.34.0 - 송출 옆에 ‘QR 보기’ 버튼 추가(선택 세션의 QR을 바로 띄움, BroadcastQRView).
 //    2.35.0 - 청중 송출 텍스트에도 용어집 적용(relaySingle/relayMulti에 glossary.normalize).
 //             콘솔·오버레이·청중이 동일한 용어로 통일됨.
+//    2.36.0 - 음성 입력 없을 때 자동 중지 기능(setupAudioTimeout/stopAudioTimeout).
+//             AudioEngine.onAudioRMS로 무음 감지, secondsWithoutAudio(초) 경과 시 stop/stopMulti.
+//    2.37.0 - 상·하단 메뉴 순서 변경.
+//             상단(단일/다국어): 시작 · 오버레이 · 음성지원 · 자막리셋 · 카운터.
+//             하단 1줄: 앱 설정 · 입력 소스 · 용어집. 하단 2줄: 청중 QR · 세션 자막 선택 ·
+//             QR 보기 · 호스트 · 자막 송출 시작 · 자막 리셋.
+//    2.38.0 - 다국어 전사문 자동 저장 개선: 모든 청중 언어 포함, 언어 코드→라벨 표시,
+//             화자/청중 언어 헤더 추가, 용어집 normalize 적용. (stopMulti의 autoSave로 자동 .txt 저장)
+//    2.39.0 - 전사문이 헤더만 저장되던 문제 수정: 정지 직전 finalizeTurn으로 진행 중 자막 확정 +
+//             transcriptText가 미확정 current* 내용도 출력. 내용 없으면 빈 파일 저장 안 함.
+//    2.40.0 - 상단 음성 버튼 라벨 통일: 단일 언어 '음성지원' → '음성' (다국어와 동일하게).
+//    2.41.0 - 단일 음성 버튼 스타일을 다국어 음성 메뉴와 동일하게(.borderless + .fixedSize) 통일.
+//    2.42.0 - 중지(stop/stopMulti) 시 오버레이 창도 함께 닫기(overlayController/multiOverlay.hide()).
+//             단일·다국어 음성 버튼 아이콘 크기 통일(.imageScale(.small)).
+//    2.44.0 - 메인 콘솔의 진행 중 자막 수정 시트 완전 제거(잘못 들어간 v2.43 되돌림).
+//             메인 콘솔 진행 중 자막은 탭해도 아무 창도 뜨지 않음. 오버레이 창 편집은 OverlayWindow에서 처리.
+//    2.45.0 - 메인 콘솔 진행 중(회색) 번역 자막도 단어 더블클릭으로 바로 수정(확정 자막과 동일).
+//             더블클릭 순간 내부 확정(글자 튐 없음), 수정 시 청중 송출도 갱신.
+//             (EditableSubtitleText.onBeginEdit + SubtitleStore.commitCurrentForEditing 사용)
+//    2.46.0 - 진행 중 자막 더블클릭 시 수정창이 즉시 닫히던 문제 수정.
+//             더블클릭 시점에 확정하지 않고 텍스트만 고정(frozenCurrentText) → 뷰 유지 → 팝오버 안 닫힘.
+//             확정은 저장(onCommit) 시점에 수행.
+//    2.47.0 - 다국어 메인 콘솔 표시 형식 변경: 원문 + 각 언어 번역(KR/JP/CH...)을 함께 표시.
+//             각 언어 줄의 단어를 더블클릭하면 단일 언어와 동일하게 바로 수정(확정/진행 중 모두).
+//             진행 중 자막은 더블클릭 시 내용 고정(frozenMulti*) → 저장 시 확정.
+//             (MultiSubtitleStore.updateTarget/commitCurrentForEditing 필요)
+//    2.48.0 - 다국어 문장 확정 기준을 한국어로 설정(startMulti에서 sourceIsKorean 전달).
+//             다국어 콘솔이 한국어 문장 단위로 끊겨 누적되지 않음.
 //
 
 import SwiftUI
@@ -31,6 +59,12 @@ struct ContentView: View {
     
     @State private var overlayController = OverlayWindowController()
     @State private var multiOverlay = MultiOverlayController()
+    
+    // v2.36.0 추가: 음성 입력 자동 중지
+    @State private var audioTimeoutTimer: Timer?
+    @State private var audioSilenceTime: Double = 0
+    @State private var lastAudioRMS: Double?
+
 
     @State private var isRunning: Bool = false
     @State private var isMultiRunning: Bool = false
@@ -42,6 +76,9 @@ struct ContentView: View {
     @State private var showAudienceQR: Bool = false
 
     @State private var isEditing: Bool = false
+    @State private var frozenCurrentText: String? = nil  // v2.46.0: 편집 중 진행 자막 고정 스냅샷(단일)
+    @State private var frozenMultiText: [String: String]? = nil  // v2.47.0: 다국어 진행 자막 번역 고정
+    @State private var frozenMultiSource: String? = nil          // v2.47.0: 다국어 진행 자막 원문 고정
     @State private var currentInputName: String = ""
     @State private var audienceLangs: [String] = []
 
@@ -74,6 +111,7 @@ struct ContentView: View {
             glossary.update(items: settings.loadGlossary())
             refreshInputName()
             migrateLanguageCodes()
+            audio.onAudioRMS = { rms in self.lastAudioRMS = rms }  // v2.36.0
             audienceLangs = settings.loadAudienceLangs().filter { $0 != settings.multiSourceLang }
             multiStore.setLanguages(audienceLangs)
         }
@@ -190,23 +228,25 @@ struct ContentView: View {
                 .frame(width: 92)
                 .disabled(isMultiRunning)
 
-                timerLabel(sessionStart)
-
-                resetButton(disabled: subtitles.segments.isEmpty && subtitles.currentSource.isEmpty) {
-                    subtitles.clear()
-                }
-
+                // v2.37.0: 순서 변경 — 시작 · 오버레이 · 음성지원 · 자막리셋 · 카운터
                 overlayToggleButton(isOn: overlayController.isVisible, color: .green, help: "오버레이") {
                     overlayController.toggle(store: subtitles, glossary: glossary, mainWindow: NSApp.keyWindow)
                 }
 
                 audioSupportButton
+
+                resetButton(disabled: subtitles.segments.isEmpty && subtitles.currentSource.isEmpty) {
+                    subtitles.clear()
+                }
+
+                timerLabel(sessionStart)
             }
         }
     }
 
-    // 모니터 아이콘 옆 '음성지원' 토글 버튼 (설정 안 들어가도 바로 전환)
+    // 모니터 아이콘 옆 '음성' 토글 버튼 (설정 안 들어가도 바로 전환)
     // 켜짐=파랑, 꺼짐=회색. 켜진 상태로 번역 중이면 '음성 지원 중' 깜빡임.
+    // v2.41.0: 다국어 음성 메뉴와 동일한 테두리 없는 스타일·크기로 통일.
     private var audioSupportButton: some View {
         Button {
             settings.playTranslatedAudio.toggle()
@@ -216,12 +256,14 @@ struct ContentView: View {
             } else {
                 HStack(spacing: 3) {
                     Image(systemName: settings.playTranslatedAudio ? "speaker.wave.2.fill" : "speaker.slash.fill")
-                    Text("음성지원")
+                    Text("음성")
                 }
                 .font(.caption)
+                .imageScale(.small)
             }
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.borderless)
+        .fixedSize()
         .tint(settings.playTranslatedAudio ? .blue : .gray)
         .disabled(isMultiRunning)
         .help("번역 음성 재생 켜기/끄기")
@@ -270,18 +312,19 @@ struct ContentView: View {
                 .frame(width: 92)
                 .disabled(audienceLangs.isEmpty || isRunning)
 
-                timerLabel(multiSessionStart)
-
-                resetButton(disabled: multiStore.segments.isEmpty && multiStore.currentSource.isEmpty) {
-                    multiStore.clear()
-                }
-
+                // v2.37.0: 순서 변경 — 시작 · 오버레이 · 음성 · 자막리셋 · 카운터
                 overlayToggleButton(isOn: multiOverlay.isVisible, color: .blue, help: "다국어 오버레이") {
                     if multiStore.langs.isEmpty { multiStore.setLanguages(audienceLangs) }
                     multiOverlay.toggle(store: multiStore)
                 }
 
                 multiAudioMenu
+
+                resetButton(disabled: multiStore.segments.isEmpty && multiStore.currentSource.isEmpty) {
+                    multiStore.clear()
+                }
+
+                timerLabel(multiSessionStart)
             }
         }
     }
@@ -301,6 +344,7 @@ struct ContentView: View {
                 Text(multiAudioActive ? langShort(settings.multiAudioLang) : "음성")
             }
             .font(.caption)
+            .imageScale(.small)
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
@@ -379,33 +423,115 @@ struct ContentView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
+                    // 확정된 세그먼트: 원문 + 각 언어 번역
                     ForEach(multiStore.segments) { seg in
-                        Text(seg.source)
-                            .font(.system(size: CGFloat(targetFont)))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(10)
-                            .background(Color.blue.opacity(0.06))
-                            .cornerRadius(6)
+                        multiSegmentRow(seg)
                     }
-                    if !multiStore.currentSource.isEmpty {
-                        Text(multiStore.currentSource)
-                            .font(.system(size: CGFloat(targetFont)))
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(10)
-                            .background(Color.gray.opacity(0.08))
-                            .cornerRadius(6)
-                            .id("msrc")
-                    }
+                    // 진행 중(회색) 자막: 원문 + 각 언어 번역
+                    multiCurrentRow
                 }
                 .padding(.vertical, 8)
             }
-            .onChange(of: multiStore.currentSource) { _, _ in proxy.scrollTo("msrc", anchor: .bottom) }
+            .onChange(of: multiStore.currentSource) { _, _ in
+                if !isEditing { proxy.scrollTo("msrc", anchor: .bottom) }
+            }
             .onChange(of: multiStore.segments.count) { _, _ in
-                withAnimation { proxy.scrollTo("msrc", anchor: .bottom) }
+                if !isEditing { withAnimation { proxy.scrollTo("msrc", anchor: .bottom) } }
             }
         }
         .frame(minHeight: 260)
+    }
+
+    // 확정된 다국어 세그먼트 한 줄: 원문 + 각 언어 번역(단어 더블클릭 수정)
+    @ViewBuilder
+    private func multiSegmentRow(_ seg: MultiSegment) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if !seg.source.isEmpty {
+                Text("원문: \(seg.source)")
+                    .font(.system(size: CGFloat(sourceFont)))
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(multiStore.langs, id: \.self) { lang in
+                if let t = seg.targets[lang], !t.isEmpty {
+                    HStack(alignment: .top, spacing: 6) {
+                        Text("\(langShort(lang)):")
+                            .font(.system(size: CGFloat(targetFont) * 0.7, weight: .semibold))
+                            .foregroundStyle(.blue.opacity(0.7))
+                            .padding(.top, 2)
+                        EditableSubtitleText(
+                            text: glossary.normalize(t),
+                            fontSize: CGFloat(targetFont),
+                            bold: false,
+                            color: .primary,
+                            isEditing: $isEditing,
+                            onCommit: { newText in
+                                multiStore.updateTarget(id: seg.id, lang: lang, newText: newText)
+                                relayMulti(lang)
+                            }
+                        )
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color.blue.opacity(0.06))
+        .cornerRadius(6)
+    }
+
+    // 진행 중(회색) 다국어 자막: 원문 + 각 언어 번역(단어 더블클릭 수정)
+    @ViewBuilder
+    private var multiCurrentRow: some View {
+        let hasContent = !multiStore.currentSource.isEmpty
+            || multiStore.currentTargets.values.contains { !$0.isEmpty }
+        if hasContent || frozenMultiText != nil {
+            VStack(alignment: .leading, spacing: 4) {
+                let srcShown = frozenMultiSource ?? multiStore.currentSource
+                if !srcShown.isEmpty {
+                    Text("원문: \(srcShown)")
+                        .font(.system(size: CGFloat(sourceFont)))
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(multiStore.langs, id: \.self) { lang in
+                    let live = multiStore.currentTargets[lang] ?? ""
+                    let shown = (frozenMultiText?[lang]) ?? live
+                    if !shown.isEmpty {
+                        HStack(alignment: .top, spacing: 6) {
+                            Text("\(langShort(lang)):")
+                                .font(.system(size: CGFloat(targetFont) * 0.7, weight: .semibold))
+                                .foregroundStyle(.blue.opacity(0.5))
+                                .padding(.top, 2)
+                            EditableSubtitleText(
+                                text: glossary.normalize(shown),
+                                fontSize: CGFloat(targetFont),
+                                bold: false,
+                                color: .secondary.opacity(0.7),
+                                isEditing: $isEditing,
+                                onCommit: { newText in
+                                    if let id = multiStore.commitCurrentForEditing() {
+                                        multiStore.updateTarget(id: id, lang: lang, newText: newText)
+                                        relayMulti(lang)
+                                    }
+                                    frozenMultiText = nil
+                                    frozenMultiSource = nil
+                                },
+                                onBeginEdit: {
+                                    // 더블클릭 순간: 확정하지 않고 현재 내용만 고정(뷰 유지 → 팝오버 안 닫힘)
+                                    frozenMultiText = multiStore.currentTargets
+                                    frozenMultiSource = multiStore.currentSource
+                                }
+                            )
+                            .italic()
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
+            .background(Color.gray.opacity(0.08))
+            .cornerRadius(6)
+            .id("msrc")
+        }
     }
 
     private var pairScroll: some View {
@@ -450,11 +576,30 @@ struct ContentView: View {
                         .font(.system(size: CGFloat(sourceFont)))
                         .foregroundStyle(.secondary)
                 }
-                if !subtitles.currentTarget.isEmpty {
-                    Text(glossary.normalize(subtitles.currentTarget))
-                        .font(.system(size: CGFloat(targetFont)))
-                        .italic()
-                        .foregroundStyle(.secondary.opacity(0.7))
+                if !subtitles.currentTarget.isEmpty || frozenCurrentText != nil {
+                    // v2.46.0: 진행 중(회색) 번역 단어를 더블클릭하면 그 단어가 블록 선택된 채 바로 수정.
+                    // 더블클릭 시점 텍스트를 고정(frozen)해 백그라운드 인식이 계속돼도 수정창이 흔들리지 않게 함.
+                    // 확정은 저장(onCommit) 시점에 수행 → 더블클릭 직후 뷰가 사라져 팝오버가 닫히는 문제 방지.
+                    EditableSubtitleText(
+                        text: glossary.normalize(frozenCurrentText ?? subtitles.currentTarget),
+                        fontSize: CGFloat(targetFont),
+                        bold: false,
+                        color: .secondary.opacity(0.7),
+                        isEditing: $isEditing,
+                        onCommit: { newText in
+                            // 저장 시점에 진행 중 자막을 확정하고 수정 내용 반영
+                            if let id = subtitles.commitCurrentForEditing() {
+                                subtitles.updateTarget(id: id, newText: newText)
+                                relaySingle()   // 청중 송출 중이면 즉시 반영
+                            }
+                            frozenCurrentText = nil
+                        },
+                        onBeginEdit: {
+                            // 더블클릭 순간: 확정하지 않고 현재 텍스트만 고정(뷰 유지 → 팝오버 안 닫힘)
+                            frozenCurrentText = subtitles.currentTarget
+                        }
+                    )
+                    .italic()
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -468,8 +613,15 @@ struct ContentView: View {
     // ── 하단: 입력 소스 + 설정/용어집 + 청중 송출 (2줄·크게) ──
         private var inputSourceBar: some View {
             VStack(alignment: .leading, spacing: 8) {
-                // 1줄: 입력 소스 · 설정 · 용어집 · 청중 QR
+                // 1줄: 앱 설정 · 입력 소스 · 용어집  (v2.37.0 순서 변경)
                 HStack(spacing: 12) {
+                    Button { showSettings = true } label: {
+                        HStack(spacing: 5) { Image(systemName: "gearshape"); Text("앱 설정") }.font(.body)
+                    }
+                    .buttonStyle(.plain)
+
+                    Divider().frame(height: 20)
+
                     Image(systemName: "mic").foregroundStyle(.secondary)
                     Button { showInputSource = true } label: {
                         HStack(spacing: 4) {
@@ -481,18 +633,8 @@ struct ContentView: View {
 
                     Divider().frame(height: 20)
 
-                    Button { showSettings = true } label: {
-                        HStack(spacing: 5) { Image(systemName: "gearshape"); Text("설정") }.font(.body)
-                    }
-                    .buttonStyle(.plain)
-
                     Button { showGlossary = true } label: {
                         HStack(spacing: 5) { Image(systemName: "character.book.closed"); Text("용어집") }.font(.body)
-                    }
-                    .buttonStyle(.plain)
-
-                    Button { showAudienceQR = true } label: {
-                        HStack(spacing: 5) { Image(systemName: "qrcode"); Text("청중 QR") }.font(.body)
                     }
                     .buttonStyle(.plain)
 
@@ -500,16 +642,27 @@ struct ContentView: View {
                 }
                 .imageScale(.large)
 
-                // 2줄: 송출 표시 · 세션 선택 · 로그인 · 송출 · QR · 리셋
+                // 2줄: 청중 QR · 세션 자막 선택 · QR 보기 · (호스트) · 자막 송출 시작 · 자막 리셋  (v2.37.0 순서 변경)
                 HStack(spacing: 10) {
+                    Button { showAudienceQR = true } label: {
+                        HStack(spacing: 4) { Image(systemName: "qrcode"); Text("청중 QR") }.font(.body)
+                    }
+                    .buttonStyle(.bordered).controlSize(.large)
+
                     Image(systemName: broadcasting ? "dot.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right")
                         .font(.body).foregroundStyle(broadcasting ? .red : .secondary)
                     Picker("", selection: $broadcastSessionId) {
-                        Text("세션 선택").tag("")
+                        Text("세션 자막 선택").tag("")
                         ForEach(qrSessions) { s in Text(sessionLabel(s)).tag(s.id) }
                     }
                     .labelsHidden().pickerStyle(.menu).controlSize(.large).fixedSize()
                     .disabled(broadcasting)
+
+                    Button { showBroadcastQR = true } label: {
+                        HStack(spacing: 4) { Image(systemName: "qrcode.viewfinder"); Text("QR 보기") }.font(.body)
+                    }
+                    .buttonStyle(.bordered).controlSize(.large)
+                    .disabled(broadcastSessionId.isEmpty)
 
                     Button { showHostLogin = true } label: {
                         HStack(spacing: 4) {
@@ -530,12 +683,6 @@ struct ContentView: View {
                     .buttonStyle(.bordered).controlSize(.large)
                     .tint(broadcasting ? .red : .blue)
                     .disabled(broadcastSessionId.isEmpty || !relay.authReady)
-
-                    Button { showBroadcastQR = true } label: {
-                        HStack(spacing: 4) { Image(systemName: "qrcode.viewfinder"); Text("QR 보기") }.font(.body)
-                    }
-                    .buttonStyle(.bordered).controlSize(.large)
-                    .disabled(broadcastSessionId.isEmpty)
 
                     Button { resetSubtitles() } label: {
                         HStack(spacing: 4) { Image(systemName: "trash"); Text("자막 리셋") }.font(.body)
@@ -685,6 +832,8 @@ struct ContentView: View {
             try audio.start()
             isRunning = true
             sessionStart = Date()
+            audioSilenceTime = 0          // v2.36.0
+            setupAudioTimeout()           // v2.36.0
             if settings.playTranslatedAudio { audioPlayer.start() }
             beginBroadcastIfNeeded()
         } catch {
@@ -694,13 +843,20 @@ struct ContentView: View {
     }
 
     private func stop() {
-        TranscriptArchive.autoSave(transcriptText(started: sessionStart), started: sessionStart)
+        // v2.39.0: 저장 직전, 아직 확정 안 된 진행 중 자막을 강제 확정 (전사문 누락 방지)
+        subtitles.finalizeTurn()
+        // 내용이 있을 때만 저장 (헤더만 있는 빈 전사문 방지)
+        if hasAnyTranscriptContent() {
+            TranscriptArchive.autoSave(transcriptText(started: sessionStart), started: sessionStart)
+        }
         audio.stop()
         client.disconnect()
         audioPlayer.stop()
         relay.stopBroadcast()
         audioBroadcaster.stop()
+        overlayController.hide()      // v2.42.0: 중지 시 오버레이 창도 닫기
         isRunning = false
+        stopAudioTimeout()            // v2.36.0
         sessionStart = nil
         statusMessage = "정지됨"
     }
@@ -723,6 +879,7 @@ struct ContentView: View {
         audienceLangs = targets
 
         multiStore.setLanguages(targets)
+        multiStore.sourceIsKorean = (settings.multiSourceLang == "ko")  // v2.48.0: 한국어 기준 문장 확정용
         statusMessage = "다국어 연결 중..."
 
         multiClient.onConnected = {
@@ -745,6 +902,8 @@ struct ContentView: View {
             try audio.start()
             isMultiRunning = true
             multiSessionStart = Date()
+            audioSilenceTime = 0          // v2.36.0
+            setupAudioTimeout()           // v2.36.0
             if !settings.multiAudioLang.isEmpty { audioPlayer.start() }
             multiOverlay.show(store: multiStore)
             beginBroadcastIfNeeded()
@@ -755,19 +914,64 @@ struct ContentView: View {
     }
 
     private func stopMulti() {
-        TranscriptArchive.autoSave(transcriptText(started: multiSessionStart), started: multiSessionStart)
+        // v2.39.0: 저장 직전, 아직 확정 안 된 진행 중 자막을 강제 확정 (전사문 누락 방지)
+        multiStore.finalizeTurn()
+        // 내용이 있을 때만 저장 (헤더만 있는 빈 전사문 방지)
+        if hasAnyTranscriptContent() {
+            TranscriptArchive.autoSave(transcriptText(started: multiSessionStart), started: multiSessionStart)
+        }
         audio.stop()
         multiClient.disconnect()
         audioPlayer.stop()
         relay.stopBroadcast()
         audioBroadcaster.stop()
+        multiOverlay.hide()           // v2.42.0: 중지 시 다국어 오버레이 창도 닫기
         isMultiRunning = false
+        stopAudioTimeout()            // v2.36.0
         multiSessionStart = nil
         statusMessage = "정지됨"
     }
 
+    // v2.36.0 추가: 음성 입력이 일정 시간 없으면 통역 자동 중지
+    private func setupAudioTimeout() {
+        stopAudioTimeout()  // 기존 타이머 정리
+        guard settings.secondsWithoutAudio > 0 else { return }
+        audioTimeoutTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
+            guard self.isRunning || self.isMultiRunning else { return }
+            if let rms = self.lastAudioRMS, rms < 500 {
+                self.audioSilenceTime += 0.5
+            } else {
+                self.audioSilenceTime = 0
+            }
+            let timeout = Double(self.settings.secondsWithoutAudio)
+            if self.audioSilenceTime >= timeout {
+                print("[BMG] 음성 입력 없음(\(Int(timeout))초) → 통역 자동 중지")
+                if self.isRunning { self.stop() }
+                if self.isMultiRunning { self.stopMulti() }
+                self.statusMessage = "음성 입력이 없어 자동 중지됨"
+            }
+        }
+    }
+
+    private func stopAudioTimeout() {
+        audioTimeoutTimer?.invalidate()
+        audioTimeoutTimer = nil
+        audioSilenceTime = 0
+    }
+
+    // ── 전사문에 저장할 내용이 하나라도 있는지 (v2.39.0) ──
+    private func hasAnyTranscriptContent() -> Bool {
+        if !subtitles.segments.isEmpty { return true }
+        if !subtitles.currentSource.isEmpty || !subtitles.currentTarget.isEmpty { return true }
+        if !multiStore.segments.isEmpty { return true }
+        if !multiStore.currentSource.isEmpty { return true }
+        if multiStore.currentTargets.values.contains(where: { !$0.isEmpty }) { return true }
+        return false
+    }
+
     // ── 전사문 텍스트 생성 (v2.20.0, v2.24.0: 시작 시각 매개변수화) ──
     // 다국어 세션 내용이 있으면 다국어 형식, 아니면 단일 언어 형식으로 구성.
+    // v2.39.0: 아직 확정되지 않은 진행 중 자막(current*)도 함께 출력 → 짧은 세션 누락 방지.
     private func transcriptText(started: Date?) -> String {
         var lines: [String] = []
         let f = DateFormatter()
@@ -776,20 +980,68 @@ struct ContentView: View {
         lines.append(String(repeating: "─", count: 24))
         lines.append("")
 
-        if !multiStore.segments.isEmpty {
+        // 다국어/단일 판단: 확정된 세그먼트 또는 진행 중 내용이 있으면 그 모드로 간주
+        let hasMulti = !multiStore.segments.isEmpty
+            || !multiStore.currentSource.isEmpty
+            || multiStore.currentTargets.values.contains { !$0.isEmpty }
+
+        if hasMulti {
+            // 이 세션에 실제로 번역문이 담긴 언어 목록 (확정 + 진행 중 모두 고려)
+            var usedLangs: [String] = []
+            for lang in multiStore.langs {
+                let inSegments = multiStore.segments.contains { ($0.targets[lang]?.isEmpty == false) }
+                let inCurrent = (multiStore.currentTargets[lang]?.isEmpty == false)
+                if inSegments || inCurrent { usedLangs.append(lang) }
+            }
+            // langs에 없지만 데이터에 존재하는 언어도 누락 없이 포함
+            for seg in multiStore.segments {
+                for lang in seg.targets.keys where !(seg.targets[lang]?.isEmpty ?? true) {
+                    if !usedLangs.contains(lang) { usedLangs.append(lang) }
+                }
+            }
+            for lang in multiStore.currentTargets.keys where !(multiStore.currentTargets[lang]?.isEmpty ?? true) {
+                if !usedLangs.contains(lang) { usedLangs.append(lang) }
+            }
+
+            if !usedLangs.isEmpty {
+                lines.append("화자: \(langLabel(settings.multiSourceLang))")
+                lines.append("청중 언어: \(usedLangs.map { langLabel($0) }.joined(separator: ", "))")
+                lines.append("")
+            }
+
+            // 확정된 세그먼트
             for seg in multiStore.segments {
                 if !seg.source.isEmpty { lines.append("· \(seg.source)") }
-                for lang in multiStore.langs {
+                for lang in usedLangs {
                     if let t = seg.targets[lang], !t.isEmpty {
-                        lines.append("[\(lang)] \(t)")
+                        lines.append("[\(langLabel(lang))] \(glossary.normalize(t))")
+                    }
+                }
+                lines.append("")
+            }
+            // 아직 확정 안 된 진행 중 자막
+            let curHasContent = !multiStore.currentSource.isEmpty
+                || multiStore.currentTargets.values.contains { !$0.isEmpty }
+            if curHasContent {
+                if !multiStore.currentSource.isEmpty { lines.append("· \(multiStore.currentSource)") }
+                for lang in usedLangs {
+                    if let t = multiStore.currentTargets[lang], !t.isEmpty {
+                        lines.append("[\(langLabel(lang))] \(glossary.normalize(t))")
                     }
                 }
                 lines.append("")
             }
         } else {
+            // 확정된 세그먼트
             for seg in subtitles.segments {
                 if !seg.sourceText.isEmpty { lines.append("· \(seg.sourceText)") }
                 if !seg.targetText.isEmpty { lines.append(glossary.normalize(seg.targetText)) }
+                lines.append("")
+            }
+            // 아직 확정 안 된 진행 중 자막
+            if !subtitles.currentSource.isEmpty || !subtitles.currentTarget.isEmpty {
+                if !subtitles.currentSource.isEmpty { lines.append("· \(subtitles.currentSource)") }
+                if !subtitles.currentTarget.isEmpty { lines.append(glossary.normalize(subtitles.currentTarget)) }
                 lines.append("")
             }
         }

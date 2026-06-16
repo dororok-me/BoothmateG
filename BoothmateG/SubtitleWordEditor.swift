@@ -2,7 +2,7 @@
 //  SubtitleWordEditor.swift
 //  BoothmateG
 //
-//  Version: 1.3.0
+//  Version: 1.4.0
 //  Changelog:
 //    1.0.0 - 최초 작성.
 //            - FlowLayout: 단어를 줄바꿈하며 배치하는 흐름 레이아웃
@@ -15,6 +15,8 @@
 //    1.2.1 - 컴파일 오류 수정: maxSize의 greatestFiniteMagnitude를 CGFloat로 명시.
 //    1.3.0 - 수정창에 현재 입력(한/영) 배지 추가: 한글이면 "가", 영문이면 "A".
 //    1.3.1 - Combine import 추가 (ObservableObject/@Published 컴파일 오류 수정).
+//    1.4.0 - EditableSubtitleText에 onBeginEdit 콜백 추가(옵셔널). 단어 더블클릭으로 편집을
+//            시작하는 순간 호출 → 진행 중 자막을 그 시점에 확정하는 용도. 기존 동작은 그대로.
 //
 
 import SwiftUI
@@ -76,6 +78,10 @@ struct EditableSubtitleText: View {
     // 수정 확정 시 "라인 전체 텍스트"를 새 값으로 콜백
     var onCommit: (String) -> Void
 
+    // v1.4.0: 단어 더블클릭으로 편집을 시작하는 순간 호출(옵셔널).
+    // 진행 중(인식 중) 자막에서 이 시점에 확정을 걸어 글자 늘어남을 멈추는 용도.
+    var onBeginEdit: () -> Void = {}
+
     @State private var editingIndex: Int? = nil
     @State private var draft: String = ""
     @State private var selectRange: NSRange? = nil   // 처음 띄울 때 블록 선택할 범위
@@ -103,6 +109,7 @@ struct EditableSubtitleText: View {
                     .padding(.horizontal, 1)
                     .contentShape(Rectangle())
                     .onTapGesture(count: 2) {     // 더블클릭 → 문장 전체 + 그 단어 블록 선택
+                        onBeginEdit()              // v1.4.0: 편집 시작 순간 알림(진행 중 자막 확정용)
                         draft = tokens.joined(separator: " ")
                         selectRange = wordRange(idx)
                         editingIndex = idx

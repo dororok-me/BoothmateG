@@ -2,11 +2,12 @@
 //  AudioEngine.swift
 //  BoothmateG
 //
-//  Version: 2.0.0
+//  Version: 2.1.0
 //  Changelog:
 //    1.0.0 - 최초 작성. AVAudioConverter로 변환
 //    2.0.0 - 다채널/Aggregate Device 대응:
 //            첫 번째 채널만 추출 → 직접 다운샘플링하여 16kHz Int16 PCM 생성
+//    2.1.0 - RMS 콜백 추가 (음성 자동 중지용): onAudioRMS
 //
 
 import Foundation
@@ -17,6 +18,7 @@ import AVFoundation
 final class AudioEngine {
 
     var onAudioData: ((Data) -> Void)?
+    var onAudioRMS: ((Double) -> Void)?  // v2.1.0 추가: RMS 값 콜백
 
     private let engine = AVAudioEngine()
     private let targetSampleRate: Double = 16000
@@ -95,6 +97,9 @@ final class AudioEngine {
             sumSq += d * d
         }
         let rms = sqrt(sumSq / Double(max(count, 1)))
+
+        // v2.1.0 추가: RMS 값을 ContentView로 전달
+        onAudioRMS?(rms)
 
         struct Counter { static var n = 0 }
         Counter.n += 1
