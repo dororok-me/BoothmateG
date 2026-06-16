@@ -2,7 +2,7 @@
 //  SubtitleStore.swift
 //  BoothmateG
 //
-//  Version: 1.6.0
+//  Version: 1.7.0
 //  Changelog:
 //    1.1.0 - turnComplete 기반 (Gemini가 turnComplete를 거의 안 보내서 실패)
 //    1.2.0 - 번역 텍스트의 마침표(.?!) 도착 시 자동으로 segment 확정
@@ -33,6 +33,11 @@ final class SubtitleStore: ObservableObject {
     // 문장 종결 문자
     private let sentenceEnders: Set<Character> = [".", "!", "?", "。", "！", "？"]
 
+    // v1.7.0: 수정 창이 떠 있는 동안 true. 이때는 문장 확정(flush)을 보류해
+    //         수정 중이던 진행 자막이 segments로 넘어가 중복 표시되는 것을 막는다.
+    //         백그라운드 인식·번역은 계속 current에 쌓이고, 수정 종료 시 정상 확정 재개.
+    var editingHold: Bool = false
+
     func appendSource(_ chunk: String) {
         currentSource += chunk
     }
@@ -54,6 +59,8 @@ final class SubtitleStore: ObservableObject {
 
     // 번역에 마침표가 있고, 원문도 어느 정도 있으면 확정
     private func flushIfSentenceEnded() {
+        // v1.7.0: 수정 중이면 자동 확정 보류 (수정 자막 중복 방지). 백그라운드는 current에 계속 누적.
+        guard !editingHold else { return }
         guard let last = currentTarget.last, sentenceEnders.contains(last) else { return }
         flush()
     }

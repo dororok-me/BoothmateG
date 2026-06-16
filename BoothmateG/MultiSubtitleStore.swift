@@ -2,7 +2,7 @@
 //  MultiSubtitleStore.swift
 //  BoothmateG
 //
-//  Version: 1.5.0
+//  Version: 1.6.0
 //  Changelog:
 //    1.0.0 - 최초 작성. 화자 원문 + 여러 언어 번역을 함께 보관.
 //    1.1.0 - 번역 진행 줄 맨 앞 공백 제거 (한 칸 들여쓰기처럼 보이는 현상 방지)
@@ -29,6 +29,9 @@ final class MultiSubtitleStore: ObservableObject {
     @Published var currentSource: String = ""
     @Published var currentTargets: [String: String] = [:]
     @Published var langs: [String] = []          // 표시 순서(청중 언어들)
+
+    // v1.6.0: 수정 창이 떠 있는 동안 true. 이때는 문장 확정을 보류해 중복 표시를 막는다.
+    var editingHold: Bool = false
 
     func setLanguages(_ l: [String]) {
         langs = l
@@ -112,6 +115,8 @@ final class MultiSubtitleStore: ObservableObject {
     var sourceIsKorean: Bool = false
 
     private func flushIfKoreanSentenceEnded() {
+        // v1.6.0: 수정 중이면 자동 확정 보류 (수정 자막 중복 방지).
+        guard !editingHold else { return }
         let ko = koreanText().trimmingCharacters(in: .whitespacesAndNewlines)
         guard let last = ko.last, sentenceEnders.contains(last) else { return }
         // 원문이 비어 있으면(아직 화자 텍스트 없음) 확정하지 않음

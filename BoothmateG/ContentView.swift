@@ -2,7 +2,7 @@
 //  ContentView.swift
 //  BoothmateG
 //
-//  Version: 2.53.0
+//  Version: 2.54.0
 //  Changelog:
 //    2.31.0 - 다국어 화자를 단일 소스와 분리(multiSourceLang). 헤더에 화자 선택 picker.
 //    2.32.0 - 청중 송출: QR 세션 선택 + 송출 토글. 자막을 FirebaseRelay로 실시간 송출.
@@ -49,6 +49,9 @@
 //
 //    2.53.0 - 정지 시 다운(5분+ 누적 후) 대응: 전사문 파일 저장을 백그라운드로(메인 멈춤 방지),
 //             콘솔은 최근 80개 세그먼트만 렌더(자막 누적 시 렌더 부하/스크롤 끊김 완화). 생성시간 로그.
+//
+//    2.54.0 - 수정 창 중복 해결: 수정 중(editingHold)에는 문장 자동 확정을 보류해
+//             수정하던 진행 자막이 segments로 넘어가 중복 표시되던 문제 수정. 엔터 시 확정 재개.
 //
 
 import SwiftUI
@@ -526,11 +529,13 @@ struct ContentView: View {
                                     }
                                     frozenMultiText = nil
                                     frozenMultiSource = nil
+                                    multiStore.editingHold = false   // v2.54.0: 확정 보류 해제
                                 },
                                 onBeginEdit: {
                                     // 더블클릭 순간: 확정하지 않고 현재 내용만 고정(뷰 유지 → 팝오버 안 닫힘)
                                     frozenMultiText = multiStore.currentTargets
                                     frozenMultiSource = multiStore.currentSource
+                                    multiStore.editingHold = true    // v2.54.0: 수정 중 자동 확정 보류(중복 방지)
                                 }
                             )
                             .italic()
@@ -607,10 +612,12 @@ struct ContentView: View {
                                 relaySingle()   // 청중 송출 중이면 즉시 반영
                             }
                             frozenCurrentText = nil
+                            subtitles.editingHold = false   // v2.54.0: 확정 보류 해제
                         },
                         onBeginEdit: {
                             // 더블클릭 순간: 확정하지 않고 현재 텍스트만 고정(뷰 유지 → 팝오버 안 닫힘)
                             frozenCurrentText = subtitles.currentTarget
+                            subtitles.editingHold = true    // v2.54.0: 수정 중 자동 확정 보류(중복 방지)
                         }
                     )
                     .italic()
