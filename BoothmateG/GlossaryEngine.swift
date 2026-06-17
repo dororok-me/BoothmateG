@@ -2,10 +2,12 @@
 //  GlossaryEngine.swift
 //  BoothmateG
 //
-//  Version: 1.2.0
+//  Version: 1.3.0
 //  Changelog:
 //    1.0.0 - 최초 작성. 번역 텍스트에 용어집 항목을 치환
 //    1.1.0 - normalize() 추가: 콤마 별칭 + 양방향. 각 칸 첫 단어를 대표 표기로 통일
+//    1.3.0 - 제거 항목 지원: source/target이 콤마로 시작하면(표준 빈칸) 그 별칭들을
+//            빈 문자열로 치환 → 자막에서 삭제(군더더기 "음," "어," 제거용).
 //    1.2.0 - 영어 표현 단·복수(s/es) 자동 인식:
 //            영어 별칭은 단어 경계 + 끝의 (s|es)를 선택적으로 매칭하므로
 //            "Net Zero"만 등록해도 "Net Zeros"/"Net Zeroes"까지 "Net Zero"로 통일.
@@ -46,8 +48,14 @@ final class GlossaryEngine {
         for item in items {
             let col1 = splitAliases(item.source)
             let col2 = splitAliases(item.target)
-            if let c1 = col1.first { for a in col1 { pairs.append((a, c1)) } }
-            if let c2 = col2.first { for a in col2 { pairs.append((a, c2)) } }
+            // v1.3.0: 원본이 콤마로 시작하면 "제거 항목"(표준이 빈칸) → 대표표기를 "" 로.
+            //         별칭들이 빈 문자열로 치환되어 자막에서 사라짐(군더더기 제거용).
+            let src1IsRemoval = item.source.trimmingCharacters(in: .whitespaces).hasPrefix(",")
+            let src2IsRemoval = item.target.trimmingCharacters(in: .whitespaces).hasPrefix(",")
+            if src1IsRemoval { for a in col1 { pairs.append((a, "")) } }
+            else if let c1 = col1.first { for a in col1 { pairs.append((a, c1)) } }
+            if src2IsRemoval { for a in col2 { pairs.append((a, "")) } }
+            else if let c2 = col2.first { for a in col2 { pairs.append((a, c2)) } }
         }
 
         // 긴 별칭부터 (부분 일치 사고 방지)
