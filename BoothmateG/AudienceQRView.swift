@@ -2,8 +2,15 @@
 //  AudienceQRView.swift
 //  BoothmateG
 //
-//  Version: 1.7.0
+//  Version: 2.0.0
 //  Changelog:
+//    2.0.0 - 위쪽 띠 로고(logoPath)에서 테마색 자동 추출 → QR 데이터 점·파인더 색에 적용
+//            (밝으면 인식 위해 자동으로 어둡게 보정, 로고 없으면 기본 진한 파랑).
+//            파인더 더 둥글게 + 파인더는 테마색을 살짝 더 진하게(포인트). 가운데 앱 로고는 색과 무관.
+//    1.9.0 - 디자인 QR 인식 실패 수정: 격자(모듈) 파싱 정확화(여백 자동 측정 → 칸 개수 정확 계산).
+//            안정 우선으로 점 크게(inset 5%), 파인더 살짝만 둥글게, 진한 단색(파랑). 그라데이션 제거.
+//    1.8.0 - 디자인 QR: 둥근 점 + 둥근 모서리(파인더) + 브랜드 그라데이션(파랑→초록).
+//            중앙 로고는 넣으면 표시(둥근 흰 배경), 안 넣으면 QR만. 오류정정 H 유지.
 //    1.3.0 - 중앙 그림 300 → 200px로 축소(스캔이 안 되던 문제 해결).
 //    1.4.0 - QR 렌더링을 공용 함수로 분리 + BroadcastQRView(세션 QR 빠른보기) 추가.
 //    1.5.0 - 그림(로고/중앙)을 앱 저장소로 복사해 원본이 사라져도 유지. 세션 삭제 시 저장 QR 파일도 제거.
@@ -386,43 +393,121 @@ func audienceAspectFit(_ imageSize: NSSize, into rect: NSRect) -> NSRect {
     return NSRect(x: rect.midX - w / 2, y: rect.midY - h / 2, width: w, height: h)
 }
 
+// v1.9.0: 디자인 QR (안정 우선) — 격자 파싱 정확화(여백 자동 측정), 점 크게, 파인더 살짝만 둥글게, 진한 단색.
+//         중앙 로고는 centerPath가 있으면 표시(둥근 흰 배경), 없으면 QR만. 오류정정 H.
 func makeAudienceQRImage(link: String, centerPath: String, logoPath: String, caption: NSAttributedString) -> NSImage? {
     let context = CIContext()
     let filter = CIFilter.qrCodeGenerator()
     filter.message = Data(link.utf8)
     filter.correctionLevel = "H"
     guard let output = filter.outputImage, output.extent.width > 0 else { return nil }
-    let scale = 600 / output.extent.width
-    let scaled = output.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-    guard let cg = context.createCGImage(scaled, from: scaled.extent) else { return nil }
-    let qr = NSImage(cgImage: cg, size: NSSize(width: 600, height: 600))
 
+    // CIFilter QR은 1픽셀 = 1모듈(칸) + 둘레 여백으로 나온다. 1:1 비트맵으로 읽는다.
+    let W = Int(output.extent.width.rounded())
+    let H = Int(output.extent.height.rounded())
+    guard W > 0, H > 0,
+          let cg = context.createCGImage(output, from: output.extent) else { return nil }
+    var px = [UInt8](repeating: 0, count: W * H * 4)
+    guard let bmp = CGContext(data: &px, width: W, height: H, bitsPerComponent: 8,
+                              bytesPerRow: W * 4, space: CGColorSpaceCreateDeviceRGB(),
+                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+    bmp.draw(cg, in: CGRect(x: 0, y: 0, width: W, height: H))
+    // CIFilter 출력은 아래가 y=0. 행을 위→아래로 쓰려고 뒤집어 읽는다.
+    func darkPx(_ x: Int, _ y: Int) -> Bool {
+        let yy = H - 1 - y
+        let i = (yy * W + x) * 4
+        return px[i] < 128
+    }
+
+    // 여백(quiet zone) 자동 측정: 위에서 첫 어두운 픽셀 행/열 찾기
+    func firstDarkRow() -> Int { for y in 0..<H { for x in 0..<W { if darkPx(x,y) { return y } } }; return 0 }
+    func lastDarkRow() -> Int { for y in stride(from: H-1, through: 0, by: -1) { for x in 0..<W { if darkPx(x,y) { return y } } }; return H-1 }
+    let margin = firstDarkRow()                 // 둘레 여백(픽셀=모듈)
+    let gridStart = margin
+    let gridEnd = lastDarkRow()                  // 마지막 어두운 행
+    let moduleCount = (gridEnd - gridStart) + 1  // 실제 칸 개수
+    guard moduleCount >= 21 else { return nil }  // QR 최소 21x21
+
+    // (col,row) 칸이 어두운지 — 여백 보정
+    func isDark(_ col: Int, _ row: Int) -> Bool {
+        let x = gridStart + col, y = gridStart + row
+        guard x >= 0, x < W, y >= 0, y < H else { return false }
+        return darkPx(x, y)
+    }
+
+    let qrPx: CGFloat = 600
+    let module = qrPx / CGFloat(moduleCount)
+    // v2.0.0: 위쪽 띠 로고(logoPath)에서 테마색 자동 추출. 없거나 추출 실패 시 기본 진한 파랑.
+    let themeColor = audienceExtractThemeColor(fromImagePath: logoPath)
+        ?? NSColor(red: 0/255, green: 90/255, blue: 200/255, alpha: 1)
+    let brand = themeColor                          // 데이터 점
+    let finderColor = audienceDarken(themeColor, by: 0.15)  // 파인더: 살짝 더 진하게(포인트)
+
+    let qr = NSImage(size: NSSize(width: qrPx, height: qrPx), flipped: false) { _ in
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
+        let n = moduleCount
+        func inFinder(_ c: Int, _ r: Int) -> Bool {
+            (c < 7 && r < 7) || (c >= n - 7 && r < 7) || (c < 7 && r >= n - 7)
+        }
+
+        // 데이터 점(둥근 원) — 크게(inset 5%), 파인더 제외
+        ctx.setFillColor(brand.cgColor)
+        for row in 0..<n {
+            for col in 0..<n {
+                guard isDark(col, row), !inFinder(col, row) else { continue }
+                let x = CGFloat(col) * module
+                let y = qrPx - CGFloat(row + 1) * module
+                let inset = module * 0.05
+                ctx.fillEllipse(in: CGRect(x: x + inset, y: y + inset,
+                                           width: module - inset*2, height: module - inset*2))
+            }
+        }
+
+        // 파인더 3개 — 더 둥글게(둥근 사각형 한계 내) + 포인트색(finderColor)
+        func drawFinder(_ cc: Int, _ cr: Int) {
+            let x = CGFloat(cc) * module
+            let y = qrPx - CGFloat(cr) * module - module * 7
+            let outer = CGRect(x: x, y: y, width: module*7, height: module*7)
+            ctx.setFillColor(finderColor.cgColor)
+            ctx.addPath(CGPath(roundedRect: outer, cornerWidth: module*1.8, cornerHeight: module*1.8, transform: nil)); ctx.fillPath()
+            let mid = outer.insetBy(dx: module, dy: module)
+            ctx.setFillColor(NSColor.white.cgColor)
+            ctx.addPath(CGPath(roundedRect: mid, cornerWidth: module*1.2, cornerHeight: module*1.2, transform: nil)); ctx.fillPath()
+            let inner = outer.insetBy(dx: module*2, dy: module*2)
+            ctx.setFillColor(finderColor.cgColor)
+            ctx.addPath(CGPath(roundedRect: inner, cornerWidth: module*0.8, cornerHeight: module*0.8, transform: nil)); ctx.fillPath()
+        }
+        drawFinder(0, 0)
+        drawFinder(n - 7, 0)
+        drawFinder(0, n - 7)
+        return true
+    }
+
+    // 캔버스 합성 (기존 레이아웃)
     let pad: CGFloat = 20
     let captionH: CGFloat = 150
     let hasLogo = !logoPath.isEmpty && FileManager.default.fileExists(atPath: logoPath)
     let logoH: CGFloat = hasLogo ? 130 : 0
-    let canvas = NSSize(width: 600 + pad * 2, height: pad + captionH + 600 + logoH + pad)
+    let canvas = NSSize(width: qrPx + pad*2, height: pad + captionH + qrPx + logoH + pad)
 
     return NSImage(size: canvas, flipped: false) { _ in
         NSColor.white.setFill()
         NSRect(origin: .zero, size: canvas).fill()
-
-        let qrRect = NSRect(x: pad, y: pad + captionH, width: 600, height: 600)
+        let qrRect = NSRect(x: pad, y: pad + captionH, width: qrPx, height: qrPx)
         qr.draw(in: qrRect)
-
         if !centerPath.isEmpty, let center = NSImage(contentsOfFile: centerPath) {
-            let cs: CGFloat = 200   // QR 중앙 그림 크기(px). 스캔 안정 한도. 안 읽히면 더 낮추세요(예: 160).
-            let cx = qrRect.minX + (600 - cs) / 2
-            let cy = qrRect.minY + (600 - cs) / 2
-            NSColor.white.setFill()
-            NSRect(x: cx - 12, y: cy - 12, width: cs + 24, height: cs + 24).fill()
-            center.draw(in: NSRect(x: cx, y: cy, width: cs, height: cs))
+            let cz: CGFloat = 170   // 안정 위해 200→170로 축소
+            let cx = qrRect.minX + (qrPx - cz)/2
+            let cy = qrRect.minY + (qrPx - cz)/2
+            let bg = NSRect(x: cx-14, y: cy-14, width: cz+28, height: cz+28)
+            NSColor.white.setFill(); NSBezierPath(roundedRect: bg, xRadius: 24, yRadius: 24).fill()
+            center.draw(in: audienceAspectFit(center.size, into: NSRect(x: cx, y: cy, width: cz, height: cz)))
         }
         if hasLogo, let logo = NSImage(contentsOfFile: logoPath) {
-            let band = NSRect(x: pad, y: pad + captionH + 600, width: 600, height: logoH)
+            let band = NSRect(x: pad, y: pad + captionH + qrPx, width: qrPx, height: logoH)
             logo.draw(in: audienceAspectFit(logo.size, into: band.insetBy(dx: 20, dy: 12)))
         }
-        caption.draw(in: NSRect(x: pad, y: 12, width: 600, height: captionH - 12))
+        caption.draw(in: NSRect(x: pad, y: 12, width: qrPx, height: captionH - 12))
         return true
     }
 }
@@ -431,6 +516,58 @@ func audienceQRPNG(_ image: NSImage) -> Data? {
     guard let tiff = image.tiffRepresentation,
           let rep = NSBitmapImageRep(data: tiff) else { return nil }
     return rep.representation(using: .png, properties: [:])
+}
+
+// v2.0.0: 로고 이미지에서 테마색 자동 추출.
+// 불투명하고 너무 밝거나 너무 어둡지 않은(=유채색) 픽셀들의 평균을 구한 뒤,
+// QR 인식을 위해 너무 밝으면 어둡게 보정한다. 추출 불가하면 nil.
+func audienceExtractThemeColor(fromImagePath path: String) -> NSColor? {
+    guard !path.isEmpty, FileManager.default.fileExists(atPath: path),
+          let img = NSImage(contentsOfFile: path),
+          let tiff = img.tiffRepresentation,
+          let rep = NSBitmapImageRep(data: tiff) else { return nil }
+    let w = rep.pixelsWide, h = rep.pixelsHigh
+    guard w > 0, h > 0 else { return nil }
+
+    var rSum = 0.0, gSum = 0.0, bSum = 0.0, count = 0.0
+    let stepX = max(1, w / 60), stepY = max(1, h / 60)   // 표본 추출(성능)
+    var y = 0
+    while y < h {
+        var x = 0
+        while x < w {
+            if let c = rep.colorAt(x: x, y: y) {
+                let a = c.alphaComponent
+                let r = c.redComponent, g = c.greenComponent, b = c.blueComponent
+                let maxc = max(r, g, b), minc = min(r, g, b)
+                let brightness = maxc
+                let sat = maxc > 0 ? (maxc - minc) / maxc : 0
+                // 불투명 + 너무 희거나 검지 않고 + 어느 정도 채도 있는 픽셀만
+                if a > 0.6 && brightness > 0.15 && brightness < 0.97 && sat > 0.15 {
+                    rSum += r; gSum += g; bSum += b; count += 1
+                }
+            }
+            x += stepX
+        }
+        y += stepY
+    }
+    guard count >= 10 else { return nil }   // 표본이 너무 적으면 실패 처리
+
+    var r = rSum / count, g = gSum / count, b = bSum / count
+    // 인식 안전: 평균 밝기가 높으면(연한 색) 어둡게 눌러 대비 확보
+    let bright = max(r, max(g, b))
+    if bright > 0.55 {
+        let k = 0.55 / bright   // 가장 밝은 채널을 0.55로 맞춤
+        r *= k; g *= k; b *= k
+    }
+    return NSColor(red: r, green: g, blue: b, alpha: 1)
+}
+
+// 색을 비율만큼 어둡게 (0.15 = 15% 어둡게)
+func audienceDarken(_ color: NSColor, by ratio: CGFloat) -> NSColor {
+    let c = color.usingColorSpace(.deviceRGB) ?? color
+    let k = max(0, 1 - ratio)
+    return NSColor(red: c.redComponent * k, green: c.greenComponent * k,
+                   blue: c.blueComponent * k, alpha: 1)
 }
 
 func audienceCopyLink(_ link: String) {
