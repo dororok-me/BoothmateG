@@ -2,11 +2,13 @@
 //  GlossaryPairView.swift
 //  BoothmateG
 //
-//  Version: 1.8.0
+//  Version: 1.9.0
 //  Changelog:
 //    1.7.0 - 엔터(Return)로도 저장: 저장 버튼에 .defaultAction 단축키 지정.
 //    1.6.0 - 저장=빈 유사표현 AI 자동생성 후 저장, 창은 유지(닫히지 않음).
 //            닫기는 우상단 X + 하단 '닫기' 버튼으로만. 글자·버튼·창 크기 확대(접근성).
+//    1.9.0 - 저장 UX: 변경 없으면 저장 버튼 비활성(회색), 저장 시 '저장됨' 표시.
+//            저장 안 된 변경이 있으면 안내. 변경 감지(스냅샷 비교).
 //    1.8.0 - systemInstruction 방식 전환에 따른 정리: 유사 표현 칸·AI 자동 생성 버튼 제거.
 //            영어↔한국어 쌍만 입력(AI가 통역 단계에서 의미로 반영). 카드 1줄로 단순화.
 //            learnedText는 데이터 호환 위해 모델에만 보존(UI 비노출).
@@ -46,6 +48,20 @@ struct GlossaryPairView: View {
     @State private var drafts: [Draft] = []
     @FocusState private var focusedField: UUID?
     @State private var showResetConfirm = false
+    // 변경 감지: 마지막 저장 시점의 스냅샷(정규화 문자열). 현재와 다르면 "변경됨".
+    @State private var savedSnapshot = ""
+    @State private var showSavedToast = false
+
+    // 현재 편집 내용을 비교용 문자열로 (순서·내용 반영)
+    private var currentSnapshot: String {
+        drafts.map {
+            "\($0.source.trimmingCharacters(in: .whitespaces))|\($0.canonical.trimmingCharacters(in: .whitespaces))|\($0.learnedText.trimmingCharacters(in: .whitespaces))"
+        }.joined(separator: "\n")
+    }
+    // 저장할 변경이 있는가
+    private var hasUnsavedChanges: Bool {
+        currentSnapshot != savedSnapshot
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -114,14 +130,26 @@ struct GlossaryPairView: View {
                 } label: { Label("리셋", systemImage: "trash") }
 
                 Spacer()
+                // 저장 완료 피드백
+                if showSavedToast {
+                    Label("저장됨", systemImage: "checkmark.circle.fill")
+                        .font(.body)
+                        .foregroundStyle(.green)
+                        .transition(.opacity)
+                } else if hasUnsavedChanges {
+                    Text("저장 안 된 변경 있음")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
                 // 닫기(저장 안 함, 창만 닫기)
                 Button("닫기") { dismiss() }
                     .controlSize(.large)
-                // 저장(엔진 반영) → 창은 유지. 닫기는 X/닫기 버튼으로만.
+                // 저장(엔진 반영) → 창은 유지. 변경 없으면 비활성(회색).
                 Button("저장") { save() }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
                     .keyboardShortcut(.defaultAction)   // 엔터(Return)로도 저장
+                    .disabled(!hasUnsavedChanges)       // 저장할 변경 없으면 회색
             }
             .font(.body)
         }
@@ -170,6 +198,8 @@ struct GlossaryPairView: View {
             Draft(source: $0.source, canonical: $0.canonical,
                   learnedText: $0.learnedTargets.joined(separator: ", "))
         }
+        // 불러온 직후 = 저장된 상태 → 스냅샷 기준 설정(이때 저장 버튼 회색)
+        savedSnapshot = currentSnapshot
     }
 
     // ── 저장(엔진 반영, 창은 닫지 않음) ──
@@ -184,6 +214,12 @@ struct GlossaryPairView: View {
         }
         settings.saveGlossaryPairs(items)
         onApply(items)
+        // 저장 완료 → 스냅샷 갱신(버튼 회색) + "저장됨" 잠깐 표시
+        savedSnapshot = currentSnapshot
+        withAnimation { showSavedToast = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            withAnimation { showSavedToast = false }
+        }
         // 창은 닫지 않음 — 닫기(X/닫기 버튼)로만 닫힘.
     }
 

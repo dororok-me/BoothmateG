@@ -2,8 +2,10 @@
 //  OverlayWindow.swift
 //  BoothmateG
 //
-//  Version: 1.16.0
+//  Version: 1.18.0
 //  Changelog:
+//    1.18.0 - 배경색 옵션을 폰트 색상과 동일 구성으로(노랑/흰/검정/초록/하늘/빨강/분홍).
+//    1.17.0 - 폰트 색상에 검정(#000000) 추가(밝은 배경/화면 공유용).
 //    1.16.0 - 가장자리/코너 리사이즈 커서가 잘 안 바뀌던 문제 수정: tracking area에 .cursorUpdate 추가,
 //             커서 설정을 applyCursor()로 통합해 mouseMoved/cursorUpdate 양쪽에서 적용
 //             (비활성 창에서 mouseMoved가 잘 안 오던 문제 해결).
@@ -657,12 +659,15 @@ struct OverlayContentView: View {
     static let bottomFixedMargin: CGFloat = 28
 
     static let fontColors: [(String, String)] = [
-        ("노란색", "#FBBF24"), ("흰색", "#FFFFFF"), ("초록색", "#4ADE80"),
-        ("하늘색", "#38BDF8"), ("빨간색", "#F87171"), ("분홍색", "#F472B6"),
+        ("노란색", "#FBBF24"), ("흰색", "#FFFFFF"), ("검정", "#000000"),
+        ("초록색", "#4ADE80"), ("하늘색", "#38BDF8"), ("빨간색", "#F87171"),
+        ("분홍색", "#F472B6"),
     ]
+    // 배경색: 폰트 색상과 동일한 구성(밝은 배경+검정 글자 등 자유 조합 가능)
     static let bgColors: [(String, String)] = [
-        ("검정", "#000000"), ("짙은회색", "#1E293B"), ("남색", "#0D1220"),
-        ("짙은파랑", "#1E3A5F"), ("짙은초록", "#064E3B"),
+        ("노란색", "#FBBF24"), ("흰색", "#FFFFFF"), ("검정", "#000000"),
+        ("초록색", "#4ADE80"), ("하늘색", "#38BDF8"), ("빨간색", "#F87171"),
+        ("분홍색", "#F472B6"),
     ]
 }
 

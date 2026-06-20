@@ -2,8 +2,9 @@
 //  MultiOverlayWindow.swift
 //  BoothmateG
 //
-//  Version: 6.9.0
+//  Version: 6.10.0
 //  Changelog:
+//    6.10.0 - 배경색 옵션을 폰트 색상과 동일 구성으로(흰/노랑/초록/하늘/주황/검정).
 //    6.1.0 - 상단 회색 제거
 //    6.2.0 - 옵션 패널을 상단 끝에 붙여 톱니/X를 가리게. 옵션 패널에 자체 닫기(X).
 //    6.3.0 - 글자 색에 검은색 추가. 어두운 패널과 구별되게 모든 색 동그라미에
@@ -143,9 +144,10 @@ struct MultiOverlayView: View {
 
     // ── 배경 ──
     private var isOBS: Bool { bgMode == "obs" }
+    // 배경색: 폰트 palette(흰/노랑/초록/하늘/주황/검정)와 동일 구성
     private let bgPalette: [(String, String)] = [
-        ("검정", "#000000"), ("짙은회색", "#1E293B"), ("남색", "#0D1220"),
-        ("파랑", "#1D4ED8"), ("초록", "#065F46")
+        ("흰색", "#FFFFFF"), ("노랑", "#FFEB3B"), ("초록", "#72FF72"),
+        ("하늘", "#59D9FF"), ("주황", "#FF8C33"), ("검정", "#000000")
     ]
     @ViewBuilder private func bgFillShape() -> some View {
         if isOBS {
