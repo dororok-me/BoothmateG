@@ -2,13 +2,17 @@
 //  GeminiLiveClient.swift
 //  BoothmateG
 //
-//  Version: 1.4.0
+//  Version: 1.6.0
 //  Changelog:
 //    1.0.0 - 최초 작성. Gemini 3.5 Live Translate WebSocket 클라이언트
 //    1.1.0 - echoTargetLanguage:false + 입력 감지 언어(onInputLanguage)
 //    1.2.0 - 번역 음성 지원: 언어코드 그대로 전송(BCP-47),
 //            modelTurn 오디오(inlineData) 파싱 → onAudio 콜백
 //    1.3.0 - 자동 재연결: 세션 끊김 시 사용자가 정지하지 않은 한 다시 연결
+//    1.6.0 - 용어집 systemInstruction 동적 주입: connect(glossaryInstruction:)으로 받아
+//            setup에 주입. 등록 용어를 번역 단계에서 강제(후처리 불필요). 비면 기본 번역.
+//    1.5.0-test - [테스트] systemInstruction에 용어집 주입 실험(dog/cat/protocol deviation).
+//                 Live Translate 모델이 받아들이는지 확인용. 검증 후 정식 구현 예정.
 //    1.4.0 - 세션 수명 관리(잦은 1008 종료 해결):
 //            · contextWindowCompression(슬라이딩 윈도우) → 긴 세션 유지
 //            · sessionResumption → 끊겨도 핸들로 같은 세션 이어가기(맥락 유지)
@@ -47,7 +51,10 @@ final class GeminiLiveClient: NSObject {
     // ── 세션 수명 관리 (v1.4.0) ──
     private var resumeHandle: String?       // sessionResumptionUpdate.newHandle 저장
 
-    func connect(apiKey: String, sourceLang: String, targetLang: String) {
+    // ── 용어집 주입 (v1.6.0) ──
+    private var connGlossaryInstruction = ""  // 용어집에서 생성한 systemInstruction(없으면 빈 문자열)
+
+    func connect(apiKey: String, sourceLang: String, targetLang: String, glossaryInstruction: String = "") {
         guard !apiKey.isEmpty else {
             onError?("API 키가 비어있습니다")
             return
@@ -56,6 +63,7 @@ final class GeminiLiveClient: NSObject {
         connApiKey = apiKey
         connSourceLang = sourceLang
         connTargetLang = targetLang
+        connGlossaryInstruction = glossaryInstruction
         isActive = true
         isReconnecting = false
         reconnectAttempts = 0
@@ -166,6 +174,13 @@ final class GeminiLiveClient: NSObject {
             // 긴 세션 유지: 컨텍스트 한도로 인한 갑작스런 종료 방지(슬라이딩 윈도우)
             "contextWindowCompression": ["slidingWindow": [:]]
         ]
+
+        // 용어집 주입(v1.6.0): 등록된 용어가 있으면 systemInstruction으로 번역 단계에서 강제.
+        //  비어있으면 주입하지 않음(기본 번역).
+        if !connGlossaryInstruction.isEmpty {
+            setupInner["systemInstruction"] = ["parts": [["text": connGlossaryInstruction]]]
+            print("[BMG] 용어집 systemInstruction 주입(\(connGlossaryInstruction.count)자)")
+        }
         // 세션 재개: 핸들이 있으면 같은 세션 이어가기, 없으면 빈 값으로 기능 활성화
         if let handle = resumeHandle, !handle.isEmpty {
             setupInner["sessionResumption"] = ["handle": handle]

@@ -2,10 +2,11 @@
 //  MultiTranslateClient.swift
 //  BoothmateG
 //
-//  Version: 1.1.0
+//  Version: 1.2.0
 //  Changelog:
 //    1.0.0 - 최초 작성. 화자 1명(소스 1개) → 청중 여러 언어(타겟 N개) 동시 번역.
 //            타겟 언어마다 GeminiLiveClient 세션을 하나씩 띄우고 같은 음성을 보냄.
+//    1.2.0 - connect(glossaryInstruction:) 추가 → 각 언어 세션에 용어집 systemInstruction 전달.
 //    1.1.0 - 언어별 번역 음성 콜백(onAudio) 추가 — 선택한 한 언어만 재생하기 위함.
 //
 
@@ -23,7 +24,7 @@ final class MultiTranslateClient {
     private var clients: [GeminiLiveClient] = []
     private var notifiedConnected = false
 
-    func connect(apiKey: String, sourceLang: String, targets: [String]) {
+    func connect(apiKey: String, sourceLang: String, targets: [String], glossaryInstruction: String = "") {
         teardown()
         notifiedConnected = false
 
@@ -40,7 +41,7 @@ final class MultiTranslateClient {
             c.onClosed = { }
 
             clients.append(c)
-            c.connect(apiKey: apiKey, sourceLang: sourceLang, targetLang: lang)
+            c.connect(apiKey: apiKey, sourceLang: sourceLang, targetLang: lang, glossaryInstruction: glossaryInstruction)
         }
     }
 

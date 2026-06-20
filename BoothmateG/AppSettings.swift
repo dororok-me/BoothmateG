@@ -2,13 +2,15 @@
 //  AppSettings.swift
 //  BoothmateG
 //
-//  Version: 1.7.0
+//  Version: 1.8.0
 //  Changelog:
 //    1.2.0 - 지원 언어 전체 + BCP-47 코드
 //    1.3.0 - 청중 언어(다국어 모드 타겟들) 저장 추가
 //    1.4.0 - 다국어 모드에서 음성 재생할 언어 1개 저장(multiAudioLang) 추가
 //    1.5.0 - 다국어 모드 화자 언어(multiSourceLang)를 단일 소스와 독립 저장.
 //    1.6.0 - 음성 입력 없을 때 자동 중지 옵션 추가(secondsWithoutAudio: 0/60/180/300/600)
+//    1.8.0 - 새 방식(번역쌍 매칭) 용어장 추가(glossaryPairJSON, GlossaryPair 모델, load/save).
+//            적용 방식 전환 플래그(useGlossaryPairMode). 기존 glossary와 완전 별도.
 //    1.7.0 - Fish Audio TTS 설정 추가(fishApiKey/fishEnabled/fishLang/fishReferenceId/fishModel).
 //            특정 언어 1개만 Fish 음성, 나머지는 Gemini 기본 음성.
 //
@@ -32,6 +34,12 @@ final class AppSettings: ObservableObject {
     @AppStorage("multiAudioLang") var multiAudioLang: String = ""
 
     @AppStorage("glossaryJSON") var glossaryJSON: String = "[]"
+
+    // v1.8.0: 새 방식(번역쌍 매칭) 용어장 — 기존과 별도 저장.
+    // 원문어(source) + 표준표기(canonical) + 학습된 번역어 캐시(learnedTargets).
+    @AppStorage("glossaryPairJSON") var glossaryPairJSON: String = "[]"
+    // v1.8.0: 적용할 글로서리 방식 (false = 기존 동일언어 치환, true = 새 번역쌍 방식)
+    @AppStorage("useGlossaryPairMode") var useGlossaryPairMode: Bool = false
 
     // 다국어 모드: 청중 언어 목록 (기본: 영어/중국어 간체/일본어)
     @AppStorage("audienceLangsJSON") var audienceLangsJSON: String = "[\"en\",\"zh-Hans\",\"ja\"]"
@@ -59,6 +67,21 @@ final class AppSettings: ObservableObject {
               let str = String(data: data, encoding: .utf8)
         else { return }
         glossaryJSON = str
+    }
+
+    // v1.8.0: 새 방식(번역쌍) 용어장 불러오기/저장
+    func loadGlossaryPairs() -> [GlossaryPair] {
+        guard let data = glossaryPairJSON.data(using: .utf8),
+              let items = try? JSONDecoder().decode([GlossaryPair].self, from: data)
+        else { return [] }
+        return items
+    }
+
+    func saveGlossaryPairs(_ items: [GlossaryPair]) {
+        guard let data = try? JSONEncoder().encode(items),
+              let str = String(data: data, encoding: .utf8)
+        else { return }
+        glossaryPairJSON = str
     }
 
     func loadAudienceLangs() -> [String] {
@@ -167,4 +190,16 @@ struct GlossaryItem: Identifiable, Codable, Hashable {
     var id = UUID()
     var source: String
     var target: String
+}
+
+// v1.8.0: 새 방식(번역쌍 매칭) 용어 모델.
+//  - source: 원문어 (예: "patient") — 원문에 이게 있으면 발동
+//  - canonical: 타겟 표준표기 (예: "피험자") — 화면에 이 표기로 통일
+//  - learnedTargets: 앱이 학습한 "실제 번역어" 캐시 (예: ["환자","환자분"])
+//    원문에 source가 있을 때, 타겟에서 이 단어들을 찾아 canonical로 교체. 조사는 그대로 둠.
+struct GlossaryPair: Identifiable, Codable, Hashable {
+    var id = UUID()
+    var source: String
+    var canonical: String
+    var learnedTargets: [String] = []
 }

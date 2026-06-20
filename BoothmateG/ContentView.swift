@@ -2,8 +2,10 @@
 //  ContentView.swift
 //  BoothmateG
 //
-//  Version: 2.54.0
+//  Version: 2.55.2
 //  Changelog:
+//    2.55.2 - 다국어 모드(multiClient)에도 용어집 systemInstruction 주입.
+//    2.55.1 - 시작 시 용어집(새 방식)을 GlossaryInstructionBuilder로 변환해 connect에 주입(번역 단계 강제).
 //    2.31.0 - 다국어 화자를 단일 소스와 분리(multiSourceLang). 헤더에 화자 선택 picker.
 //    2.32.0 - 청중 송출: QR 세션 선택 + 송출 토글. 자막을 FirebaseRelay로 실시간 송출.
 //    2.33.0 - 송출 버튼 문구 '송출/송출 중' → '자막 송출 시작/자막 송출 중'.
@@ -50,6 +52,7 @@
 //    2.53.0 - 정지 시 다운(5분+ 누적 후) 대응: 전사문 파일 저장을 백그라운드로(메인 멈춤 방지),
 //             콘솔은 최근 80개 세그먼트만 렌더(자막 누적 시 렌더 부하/스크롤 끊김 완화). 생성시간 로그.
 //
+//    2.55.0 - 새 방식(번역쌍 매칭) 용어집 버튼/시트 추가(GlossaryPairView). UI 뼈대만(로직 미연결).
 //    2.54.0 - 수정 창 중복 해결: 수정 중(editingHold)에는 문장 자동 확정을 보류해
 //             수정하던 진행 자막이 segments로 넘어가 중복 표시되던 문제 수정. 엔터 시 확정 재개.
 //
@@ -84,6 +87,8 @@ struct ContentView: View {
     @State private var isMultiRunning: Bool = false
     @State private var statusMessage: String = "대기 중"
     @State private var showGlossary: Bool = false
+    // v2.55.0: 새 방식(번역쌍) 용어집 창
+    @State private var showGlossaryPair: Bool = false
     @State private var showSettings: Bool = false
     @State private var showInputSource: Bool = false
     @State private var showAudienceLangs: Bool = false
@@ -143,6 +148,12 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showGlossary) {
             GlossaryView(settings: settings) { items in glossary.update(items: items) }
+        }
+        // v2.55.0: 새 방식(번역쌍) 용어집 시트 (로직은 다음 단계에서 연결)
+        .sheet(isPresented: $showGlossaryPair) {
+            GlossaryPairView(settings: settings) { pairs in
+                settings.saveGlossaryPairs(pairs)
+            }
         }
         .sheet(isPresented: $showSettings) {
             ConsoleSettingsView(settings: settings, onExportTranscript: { exportCurrentTranscript() })
@@ -659,6 +670,13 @@ struct ContentView: View {
                     }
                     .buttonStyle(.plain)
 
+                    // v2.55.0: 새 방식(번역쌍 매칭) 용어집 버튼
+                    Button { showGlossaryPair = true } label: {
+                        HStack(spacing: 5) { Image(systemName: "character.book.closed.fill"); Text("용어집2") }.font(.body)
+                    }
+                    .buttonStyle(.plain)
+                    .help("새 방식: 원문어=표준표기 (예: patient=피험자). 원문 대조로 번역어를 통일")
+
                     Spacer()
                 }
                 .imageScale(.large)
@@ -900,7 +918,11 @@ struct ContentView: View {
 
         audio.onAudioData = { [client] d in client.sendAudio(d) }
 
-        client.connect(apiKey: settings.geminiApiKey, langA: settings.targetLang, langB: settings.sourceLang)
+        // 용어집(새 방식) → systemInstruction 변환. '이 방식 사용' ON이고 등록 용어가 있으면 주입.
+        let glossaryInstruction: String = settings.useGlossaryPairMode
+            ? GlossaryInstructionBuilder.build(from: settings.loadGlossaryPairs())
+            : ""
+        client.connect(apiKey: settings.geminiApiKey, langA: settings.targetLang, langB: settings.sourceLang, glossaryInstruction: glossaryInstruction)
 
         do {
             try audio.start()
@@ -995,7 +1017,11 @@ struct ContentView: View {
 
         audio.onAudioData = { [multiClient] d in multiClient.sendAudio(d) }
 
-        multiClient.connect(apiKey: settings.geminiApiKey, sourceLang: settings.multiSourceLang, targets: targets)
+        // 용어집(새 방식) → systemInstruction. 다국어도 동일 주입(영↔한 쌍 기반, AI가 타 언어에도 참고).
+        let multiGlossary: String = settings.useGlossaryPairMode
+            ? GlossaryInstructionBuilder.build(from: settings.loadGlossaryPairs())
+            : ""
+        multiClient.connect(apiKey: settings.geminiApiKey, sourceLang: settings.multiSourceLang, targets: targets, glossaryInstruction: multiGlossary)
 
         do {
             try audio.start()
