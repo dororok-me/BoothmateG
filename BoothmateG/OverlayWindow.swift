@@ -2,8 +2,10 @@
 //  OverlayWindow.swift
 //  BoothmateG
 //
-//  Version: 1.18.0
+//  Version: 1.19.1
 //  Changelog:
+//    1.19.1 - 단어 간격을 진행 중 자막에도 적용(EditableSubtitleText wordSpacing 전달) → 확정/진행 일관.
+//    1.19.0 - 단어 사이 간격(공백 폭) 조절 추가: 설정에 "단어 간격" 슬라이더(공백에만 kern 적용, 자간 불변). 확정 자막에 적용.
 //    1.18.0 - 배경색 옵션을 폰트 색상과 동일 구성으로(노랑/흰/검정/초록/하늘/빨강/분홍).
 //    1.17.0 - 폰트 색상에 검정(#000000) 추가(밝은 배경/화면 공유용).
 //    1.16.0 - 가장자리/코너 리사이즈 커서가 잘 안 바뀌던 문제 수정: tracking area에 .cursorUpdate 추가,
@@ -335,6 +337,7 @@ struct OverlayContentView: View {
     @AppStorage("ov_srcColorHex")  private var srcColorHex: String = "#CBD5E1"
     @AppStorage("ov_lineSpacing")  private var lineSpacing: Double = 8        // 단락(세그먼트) 사이 간격
     @AppStorage("ov_textLineSpacing") private var textLineSpacing: Double = 2 // 줄 간격(한 문단 내 줄 높이)
+    @AppStorage("ov_wordSpacing")  private var wordSpacing: Double = 3        // 단어 사이 간격(공백 폭)
     @AppStorage("ov_innerMargin")  private var innerMargin: Double = 20
     @AppStorage("ov_winOpacity")   private var winOpacity: Double = 1.0
 
@@ -378,6 +381,7 @@ struct OverlayContentView: View {
                                         fontSize: fontSize,
                                         bold: fontBold,
                                         color: Color(hex: fontColorHex),
+                                        wordSpacing: CGFloat(4 + wordSpacing),   // 확정 자막 단어 간격과 비슷하게
                                         isEditing: $isCurrentEditing,
                                         onCommit: { newText in
                                             // 더블클릭 순간 확정해 둔 세그먼트에 수정 내용 반영
@@ -517,7 +521,7 @@ struct OverlayContentView: View {
                 .onExitCommand { editingID = nil }
             } else {
                 // 글로서리 적용된 텍스트를 표시 (저장소 원본은 그대로 유지)
-                Text(glossary.normalize(seg.targetText))
+                Text(spacedAttr(glossary.normalize(seg.targetText)))
                     .font(.system(size: fontSize, weight: fontBold ? .bold : .regular))
                     .foregroundColor(Color(hex: fontColorHex))
                     .modifier(StrokeModifier(enabled: textStroke))
@@ -534,6 +538,19 @@ struct OverlayContentView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // 단어 사이(공백)에만 간격을 적용한 AttributedString 생성.
+    //  공백 문자에 kern을 줘서 단어 사이만 넓힘(자간은 그대로). wordSpacing<=0이면 원본.
+    private func spacedAttr(_ s: String) -> AttributedString {
+        guard wordSpacing > 0 else { return AttributedString(s) }
+        var result = AttributedString("")
+        for ch in s {
+            var piece = AttributedString(String(ch))
+            if ch == " " { piece.kern = CGFloat(wordSpacing) }   // 공백 뒤 간격 추가
+            result.append(piece)
+        }
+        return result
     }
 
     // ── 설정 패널 ──
@@ -591,6 +608,10 @@ struct OverlayContentView: View {
             Divider()
 
             // 레이아웃
+            sRow("단어 간격") {
+                Slider(value: $wordSpacing, in: 0...20, step: 1).frame(width: 120)
+                Text("\(Int(wordSpacing))pt").frame(width: 34).font(.caption)
+            }
             sRow("줄 간격") {
                 Slider(value: $textLineSpacing, in: 0...20, step: 1).frame(width: 120)
                 Text("\(Int(textLineSpacing))pt").frame(width: 34).font(.caption)

@@ -2,7 +2,7 @@
 //  SubtitleWordEditor.swift
 //  BoothmateG
 //
-//  Version: 1.4.0
+//  Version: 1.5.0
 //  Changelog:
 //    1.0.0 - 최초 작성.
 //            - FlowLayout: 단어를 줄바꿈하며 배치하는 흐름 레이아웃
@@ -15,6 +15,7 @@
 //    1.2.1 - 컴파일 오류 수정: maxSize의 greatestFiniteMagnitude를 CGFloat로 명시.
 //    1.3.0 - 수정창에 현재 입력(한/영) 배지 추가: 한글이면 "가", 영문이면 "A".
 //    1.3.1 - Combine import 추가 (ObservableObject/@Published 컴파일 오류 수정).
+//    1.5.0 - EditableSubtitleText에 wordSpacing 파라미터 추가(FlowLayout 단어 간격 조절).
 //    1.4.0 - EditableSubtitleText에 onBeginEdit 콜백 추가(옵셔널). 단어 더블클릭으로 편집을
 //            시작하는 순간 호출 → 진행 중 자막을 그 시점에 확정하는 용도. 기존 동작은 그대로.
 //
@@ -71,6 +72,7 @@ struct EditableSubtitleText: View {
     var fontSize: CGFloat
     var bold: Bool
     var color: Color
+    var wordSpacing: CGFloat = 4   // 단어 사이 간격(FlowLayout spacing). 기본 4.
 
     // 편집 중 여부를 상위로 알려줌 (자동 스크롤 일시정지용)
     @Binding var isEditing: Bool
@@ -101,7 +103,7 @@ struct EditableSubtitleText: View {
     }
 
     var body: some View {
-        FlowLayout(spacing: 4, lineSpacing: 4) {
+        FlowLayout(spacing: wordSpacing, lineSpacing: 4) {
             ForEach(Array(tokens.enumerated()), id: \.offset) { idx, word in
                 Text(word)
                     .font(.system(size: fontSize, weight: bold ? .medium : .regular))
