@@ -2,8 +2,9 @@
 //  ContentView.swift
 //  BoothmateG
 //
-//  Version: 2.55.2
+//  Version: 2.55.3
 //  Changelog:
+//    2.55.3 - 통역 지침·블랙리스트를 systemInstruction 빌더에 전달(단일·다국어).
 //    2.55.2 - 다국어 모드(multiClient)에도 용어집 systemInstruction 주입.
 //    2.55.1 - 시작 시 용어집(새 방식)을 GlossaryInstructionBuilder로 변환해 connect에 주입(번역 단계 강제).
 //    2.31.0 - 다국어 화자를 단일 소스와 분리(multiSourceLang). 헤더에 화자 선택 picker.
@@ -920,7 +921,9 @@ struct ContentView: View {
 
         // 용어집(새 방식) → systemInstruction 변환. '이 방식 사용' ON이고 등록 용어가 있으면 주입.
         let glossaryInstruction: String = settings.useGlossaryPairMode
-            ? GlossaryInstructionBuilder.build(from: settings.loadGlossaryPairs())
+            ? GlossaryInstructionBuilder.build(pairs: settings.loadGlossaryPairs(),
+                                               guide: settings.interpretGuide,
+                                               blacklist: settings.blacklistWords)
             : ""
         client.connect(apiKey: settings.geminiApiKey, langA: settings.targetLang, langB: settings.sourceLang, glossaryInstruction: glossaryInstruction)
 
@@ -1019,7 +1022,9 @@ struct ContentView: View {
 
         // 용어집(새 방식) → systemInstruction. 다국어도 동일 주입(영↔한 쌍 기반, AI가 타 언어에도 참고).
         let multiGlossary: String = settings.useGlossaryPairMode
-            ? GlossaryInstructionBuilder.build(from: settings.loadGlossaryPairs())
+            ? GlossaryInstructionBuilder.build(pairs: settings.loadGlossaryPairs(),
+                                               guide: settings.interpretGuide,
+                                               blacklist: settings.blacklistWords)
             : ""
         multiClient.connect(apiKey: settings.geminiApiKey, sourceLang: settings.multiSourceLang, targets: targets, glossaryInstruction: multiGlossary)
 

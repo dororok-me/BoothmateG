@@ -2,11 +2,17 @@
 //  GlossaryPairView.swift
 //  BoothmateG
 //
-//  Version: 1.9.0
+//  Version: 2.2.1
 //  Changelog:
 //    1.7.0 - 엔터(Return)로도 저장: 저장 버튼에 .defaultAction 단축키 지정.
 //    1.6.0 - 저장=빈 유사표현 AI 자동생성 후 저장, 창은 유지(닫히지 않음).
 //            닫기는 우상단 X + 하단 '닫기' 버튼으로만. 글자·버튼·창 크기 확대(접근성).
+//    2.2.1 - 빌드 오류 수정: 필러 ForEach($fillers)의 f는 값이므로 f.id 사용(f.wrappedValue.id 제거).
+//    2.2.0 - 통역 지침 탭 안내 강화(최우선 표준 지침, 민감 표현 처리 포함). 블랙리스트 안내를 '딱 그 단어만'으로 명확화.
+//    2.1.0 - 블랙리스트를 박스형(카드)으로: 필러를 하나씩 등록/삭제. 저장 시 콤마로 합쳐
+//            blacklistWords에 저장, 로드 시 박스로 분리. 안내에 '단어 일부 보호' 명시.
+//    2.0.0 - 탭 3개 구조(용어집 / 통역 지침 / 블랙리스트). 통역 지침·블랙리스트는 TextEditor로
+//            자유 입력 → systemInstruction에 함께 주입. 변경 감지·저장에 셋 다 포함.
 //    1.9.0 - 저장 UX: 변경 없으면 저장 버튼 비활성(회색), 저장 시 '저장됨' 표시.
 //            저장 안 된 변경이 있으면 안내. 변경 감지(스냅샷 비교).
 //    1.8.0 - systemInstruction 방식 전환에 따른 정리: 유사 표현 칸·AI 자동 생성 버튼 제거.
@@ -45,18 +51,30 @@ struct GlossaryPairView: View {
         var learnedText: String = ""   // 번역어 캐시 (콤마 구분 문자열, 예: "환자, 환자분")
     }
 
+    // 블랙리스트(필러) 항목 모델 — 박스 하나 = 필러 하나
+    private struct FillerItem: Identifiable {
+        let id = UUID()
+        var word: String = ""
+    }
+
     @State private var drafts: [Draft] = []
+    @State private var fillers: [FillerItem] = []
     @FocusState private var focusedField: UUID?
+    @FocusState private var focusedFiller: UUID?
     @State private var showResetConfirm = false
     // 변경 감지: 마지막 저장 시점의 스냅샷(정규화 문자열). 현재와 다르면 "변경됨".
     @State private var savedSnapshot = ""
     @State private var showSavedToast = false
+    // 탭 선택 (0=용어집, 1=통역 지침, 2=블랙리스트)
+    @State private var selectedTab = 0
 
-    // 현재 편집 내용을 비교용 문자열로 (순서·내용 반영)
+    // 현재 편집 내용을 비교용 문자열로 (용어집 + 통역 지침 + 블랙리스트)
     private var currentSnapshot: String {
-        drafts.map {
+        let pairs = drafts.map {
             "\($0.source.trimmingCharacters(in: .whitespaces))|\($0.canonical.trimmingCharacters(in: .whitespaces))|\($0.learnedText.trimmingCharacters(in: .whitespaces))"
         }.joined(separator: "\n")
+        let fillerStr = fillers.map { $0.word.trimmingCharacters(in: .whitespaces) }.joined(separator: ",")
+        return pairs + "\n##GUIDE##\n" + settings.interpretGuide + "\n##BLACK##\n" + fillerStr
     }
     // 저장할 변경이 있는가
     private var hasUnsavedChanges: Bool {
@@ -66,20 +84,13 @@ struct GlossaryPairView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
 
-            // 헤더
+            // 헤더 (공통)
             HStack {
-                Text("용어집 (새 방식)").font(.title2).bold()
+                Text("용어집 · 통역 설정").font(.title2).bold()
                 Spacer()
                 Toggle("이 방식 사용", isOn: $settings.useGlossaryPairMode)
                     .toggleStyle(.switch)
-                    .help("켜면 새 방식(번역쌍 매칭), 끄면 기존 방식(동일언어 치환)이 자막에 적용됩니다.")
-                Button {
-                    let d = Draft()
-                    drafts.append(d)
-                    focusedField = d.id
-                } label: {
-                    Label("용어 추가", systemImage: "plus").font(.body)
-                }
+                    .help("켜면 용어집·통역 지침·블랙리스트가 통역에 적용됩니다.")
                 // 우상단 닫기(X)
                 Button {
                     dismiss()
@@ -92,42 +103,42 @@ struct GlossaryPairView: View {
                 .help("닫기")
             }
 
-            Text("왼쪽에 영어, 오른쪽에 한국어를 넣으세요(예: patient = 피험자). 양방향으로 적용됩니다: 영어 원문에 patient가 나오면 한국어를 ‘피험자’로, 한국어 원문에 피험자가 나오면 영어를 ‘patient’로 통일합니다. 등록한 용어를 AI가 통역 단계에서 그대로 반영합니다. ‘이 방식 사용’을 켜고 ‘저장’ 후 ‘시작’하면 적용됩니다.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            // 탭 선택
+            Picker("", selection: $selectedTab) {
+                Text("용어집").tag(0)
+                Text("통역 지침").tag(1)
+                Text("블랙리스트").tag(2)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
 
-            // 용어 카드 목록
-            ScrollView {
-                VStack(spacing: 8) {
-                    ForEach($drafts) { $d in
-                        card($d)
-                    }
+            // 탭별 내용
+            Group {
+                if selectedTab == 0 {
+                    glossaryTab
+                } else if selectedTab == 1 {
+                    guideTab
+                } else {
+                    blacklistTab
                 }
-                .padding(.vertical, 2)
             }
-            .frame(minHeight: 280)
-
-            if drafts.isEmpty {
-                Text("등록된 용어가 없습니다. ‘용어 추가’를 눌러 시작하세요.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 8)
-            }
+            .frame(maxHeight: .infinity)
 
             Divider()
 
+            // 하단 버튼 (공통)
             HStack(spacing: 10) {
-                Button {
-                    importPairs()
-                } label: { Label("가져오기", systemImage: "square.and.arrow.down") }
-                Button {
-                    exportPairs()
-                } label: { Label("내보내기", systemImage: "square.and.arrow.up") }
-                Button(role: .destructive) {
-                    showResetConfirm = true
-                } label: { Label("리셋", systemImage: "trash") }
+                if selectedTab == 0 {
+                    Button {
+                        importPairs()
+                    } label: { Label("가져오기", systemImage: "square.and.arrow.down") }
+                    Button {
+                        exportPairs()
+                    } label: { Label("내보내기", systemImage: "square.and.arrow.up") }
+                    Button(role: .destructive) {
+                        showResetConfirm = true
+                    } label: { Label("리셋", systemImage: "trash") }
+                }
 
                 Spacer()
                 // 저장 완료 피드백
@@ -144,12 +155,12 @@ struct GlossaryPairView: View {
                 // 닫기(저장 안 함, 창만 닫기)
                 Button("닫기") { dismiss() }
                     .controlSize(.large)
-                // 저장(엔진 반영) → 창은 유지. 변경 없으면 비활성(회색).
+                // 저장 → 창은 유지. 변경 없으면 비활성(회색).
                 Button("저장") { save() }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
-                    .keyboardShortcut(.defaultAction)   // 엔터(Return)로도 저장
-                    .disabled(!hasUnsavedChanges)       // 저장할 변경 없으면 회색
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!hasUnsavedChanges)
             }
             .font(.body)
         }
@@ -161,6 +172,117 @@ struct GlossaryPairView: View {
             Button("모두 삭제", role: .destructive) { drafts.removeAll() }
         } message: {
             Text("현재 편집 중인 모든 용어가 사라집니다. ‘저장’을 눌러야 실제로 반영됩니다.")
+        }
+    }
+
+    // ── 탭 1: 용어집 ──
+    @ViewBuilder
+    private var glossaryTab: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("영어 ↔ 한국어 용어를 등록하면 통역 단계에서 그대로 반영됩니다(예: patient = 피험자). 양방향 적용.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button {
+                    let d = Draft()
+                    drafts.append(d)
+                    focusedField = d.id
+                } label: {
+                    Label("용어 추가", systemImage: "plus").font(.body)
+                }
+            }
+
+            ScrollView {
+                VStack(spacing: 8) {
+                    ForEach($drafts) { $d in
+                        card($d)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+
+            if drafts.isEmpty {
+                Text("등록된 용어가 없습니다. ‘용어 추가’를 눌러 시작하세요.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 8)
+            }
+        }
+    }
+
+    // ── 탭 2: 통역 지침 ──
+    @ViewBuilder
+    private var guideTab: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("이 행사의 통역 방향을 자유롭게 지시하세요. 가장 강력한 표준 지침으로, 톤·격식·호칭은 물론 민감하거나 부적절한 표현의 처리 방침까지 AI가 맥락에 맞춰 따릅니다.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("예시: 청중은 정부 고위 관계자이니 정중한 격식체로. ‘그녀/그들/당신’ 대신 ‘교수님’으로 호칭. 청중에 무슬림이 포함되니 종교 비하·신성모독 표현은 직접 옮기지 말고 중립적으로 완곡하게 처리. 노골적 성차별 표현은 순화. 가능한 간결하게.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            TextEditor(text: $settings.interpretGuide)
+                .font(.body)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(6)
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.3)))
+        }
+    }
+
+    // ── 탭 3: 블랙리스트 ──
+    @ViewBuilder
+    private var blacklistTab: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("등록한 단어를 통역에서 딱 그대로 생략합니다. ‘음, 어, 저기’ 같은 명확한 군더더기에 쓰세요. 등록한 표현만 정확히 빠지며(유사어로 확대 안 됨), ‘마음’의 ‘음’ 같은 단어 일부는 보호됩니다. 톤·민감 표현 처리는 ‘통역 지침’ 탭을 쓰세요.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button {
+                    let f = FillerItem()
+                    fillers.append(f)
+                    focusedFiller = f.id
+                } label: {
+                    Label("필러 추가", systemImage: "plus").font(.body)
+                }
+            }
+
+            ScrollView {
+                VStack(spacing: 8) {
+                    ForEach($fillers) { $f in
+                        HStack(spacing: 8) {
+                            TextField("필러 (예: 음)", text: $f.word)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.title3)
+                                .focused($focusedFiller, equals: f.id)
+                            Button(role: .destructive) {
+                                fillers.removeAll { $0.id == f.id }
+                            } label: {
+                                Image(systemName: "trash").font(.title3)
+                            }
+                            .buttonStyle(.borderless)
+                            .frame(width: 28)
+                        }
+                        .padding(10)
+                        .background(Color.gray.opacity(0.08))
+                        .cornerRadius(8)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+
+            if fillers.isEmpty {
+                Text("등록된 필러가 없습니다. ‘필러 추가’를 눌러 시작하세요.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 8)
+            }
         }
     }
 
@@ -198,6 +320,12 @@ struct GlossaryPairView: View {
             Draft(source: $0.source, canonical: $0.canonical,
                   learnedText: $0.learnedTargets.joined(separator: ", "))
         }
+        // 블랙리스트: 저장된 콤마 구분 문자열 → 박스 목록으로
+        fillers = settings.blacklistWords
+            .split(whereSeparator: { $0 == "," || $0 == "\n" })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .map { FillerItem(word: $0) }
         // 불러온 직후 = 저장된 상태 → 스냅샷 기준 설정(이때 저장 버튼 회색)
         savedSnapshot = currentSnapshot
     }
@@ -213,6 +341,11 @@ struct GlossaryPairView: View {
             return GlossaryPair(source: s, canonical: c, learnedTargets: learned)
         }
         settings.saveGlossaryPairs(items)
+        // 블랙리스트: 박스들을 콤마로 합쳐 저장
+        settings.blacklistWords = fillers
+            .map { $0.word.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: ", ")
         onApply(items)
         // 저장 완료 → 스냅샷 갱신(버튼 회색) + "저장됨" 잠깐 표시
         savedSnapshot = currentSnapshot

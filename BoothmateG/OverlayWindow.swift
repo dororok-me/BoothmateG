@@ -2,8 +2,12 @@
 //  OverlayWindow.swift
 //  BoothmateG
 //
-//  Version: 1.19.1
+//  Version: 1.21.0
 //  Changelog:
+//    1.21.0 - 외부 디스플레이 복원 견고화: 디스플레이 고유 ID(CGDirectDisplayID)+모니터 내 상대 위치 저장.
+//             같은 모니터를 찾아 복원, 없으면 절대좌표→메인화면 폴백. 이동/리사이즈마다 저장(크래시 대비).
+//    1.20.0 - 오버레이 창 위치·크기 기억(setFrameAutosaveName): 이동/리사이즈 시 자동 저장,
+//             앱 재시작·복구 시 마지막 위치 복원. 최초만 메인 창 위 배치. 화면 밖이면 안전망으로 복귀.
 //    1.19.1 - 단어 간격을 진행 중 자막에도 적용(EditableSubtitleText wordSpacing 전달) → 확정/진행 일관.
 //    1.19.0 - 단어 사이 간격(공백 폭) 조절 추가: 설정에 "단어 간격" 슬라이더(공백에만 kern 적용, 자간 불변). 확정 자막에 적용.
 //    1.18.0 - 배경색 옵션을 폰트 색상과 동일 구성으로(노랑/흰/검정/초록/하늘/빨강/분홍).
@@ -98,7 +102,10 @@ final class OverlayWindowController {
     }
 
     func show(store: SubtitleStore, glossary: GlossaryEngine, mainWindow: NSWindow?) {
+        var didCreate = false
+        var restoredFrame = false
         if panel == nil {
+            didCreate = true
             let frame = NSRect(x: 100, y: 100, width: 800, height: 220)
             panel = OverlayPanel(frame: frame)
 
@@ -146,17 +153,96 @@ final class OverlayWindowController {
                 handle.leadingAnchor.constraint(equalTo: container.leadingAnchor),
                 handle.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             ])
+
+            // 마지막 위치·크기 복원: ① 디스플레이 ID 기반(외부 출력 견고) → ② 절대좌표 폴백.
+            restoredFrame = restoreFrameByDisplay()              // 같은 모니터 찾아 복원
+            if !restoredFrame {
+                restoredFrame = panel?.setFrameUsingName(Self.frameAutosaveName) ?? false  // 폴백: 절대좌표
+            }
+            panel?.setFrameAutosaveName(Self.frameAutosaveName)  // 이후 이동/리사이즈 자동 저장(절대좌표)
+
+            // 크래시 대비: 닫기를 못 거치고 앱이 다운돼도 마지막 모니터·위치가 남도록
+            // 이동/리사이즈가 일어날 때마다 디스플레이 정보 저장.
+            if let p = panel {
+                NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: p, queue: .main) { [weak self] _ in
+                    self?.saveFrameByDisplay()
+                }
+                NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: p, queue: .main) { [weak self] _ in
+                    self?.saveFrameByDisplay()
+                }
+            }
         }
 
-        // 메인 창 위에 배치
-        if let mf = mainWindow?.frame {
+        // 창을 처음 만들 때만 위치 배치: 저장된 위치가 있으면 그대로, 없으면 메인 창 위.
+        if didCreate, !restoredFrame, let mf = mainWindow?.frame {
             panel?.setFrame(NSRect(x: mf.origin.x, y: mf.origin.y + mf.height + 8,
                                    width: mf.width, height: 220), display: true)
         }
+
+        // 안전망: 복원된 위치가 모든 화면 밖이면(모니터 분리 등) 보이는 화면으로 끌어옴.
+        if didCreate, let p = panel,
+           !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(p.frame) }) {
+            let target = mainWindow?.frame ?? (NSScreen.main?.visibleFrame ?? NSRect(x: 100, y: 100, width: 800, height: 220))
+            panel?.setFrame(NSRect(x: target.origin.x, y: target.origin.y,
+                                   width: min(800, target.width), height: 220), display: true)
+        }
+
         panel?.makeKeyAndOrderFront(nil)
     }
 
+    // 창 위치·크기 자동 저장 이름 (UserDefaults에 "NSWindow Frame {이름}"으로 저장됨)
+    private static let frameAutosaveName = "BoothmateGOverlayFrame"
+    // 디스플레이 ID 기반 저장 키
+    private static let dispKey = "ov_overlayDisplayID"   // 마지막으로 있던 모니터 고유 ID
+    private static let relKey  = "ov_overlayRelFrame"    // 그 모니터 안에서의 상대 위치/크기 "x,y,w,h"
+
+    // 현재 창이 놓인 화면의 디스플레이 ID + 모니터 내 상대 프레임을 저장.
+    //  창을 닫을 때 호출 → 재시작/다운 후에도 "그 모니터"에 그대로 복원.
+    private func saveFrameByDisplay() {
+        guard let p = panel, let scr = p.screen ?? screenContaining(p.frame) else { return }
+        guard let sid = displayID(of: scr) else { return }
+        let sf = scr.frame
+        // 모니터 원점 기준 상대 좌표(모니터가 어디 붙든 동일하게 복원되도록)
+        let rx = p.frame.origin.x - sf.origin.x
+        let ry = p.frame.origin.y - sf.origin.y
+        let rel = "\(rx),\(ry),\(p.frame.width),\(p.frame.height)"
+        UserDefaults.standard.set(Int(sid), forKey: Self.dispKey)
+        UserDefaults.standard.set(rel, forKey: Self.relKey)
+    }
+
+    // 저장된 디스플레이 ID와 같은 모니터를 찾아, 그 안의 상대 위치로 복원. 성공 시 true.
+    private func restoreFrameByDisplay() -> Bool {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: Self.dispKey) != nil,
+              let rel = defaults.string(forKey: Self.relKey) else { return false }
+        let savedID = UInt32(defaults.integer(forKey: Self.dispKey))
+        // 같은 ID의 모니터가 현재 연결돼 있는지
+        guard let scr = NSScreen.screens.first(where: { displayID(of: $0) == savedID }) else {
+            return false   // 그 모니터 없음 → 폴백
+        }
+        let parts = rel.split(separator: ",").compactMap { Double($0) }
+        guard parts.count == 4 else { return false }
+        let sf = scr.frame
+        let f = NSRect(x: sf.origin.x + parts[0], y: sf.origin.y + parts[1],
+                       width: parts[2], height: parts[3])
+        panel?.setFrame(f, display: true)
+        return true
+    }
+
+    // NSScreen → CGDirectDisplayID (모니터 고유 식별자)
+    private func displayID(of screen: NSScreen) -> CGDirectDisplayID? {
+        let key = NSDeviceDescriptionKey("NSScreenNumber")
+        return (screen.deviceDescription[key] as? NSNumber)?.uint32Value
+    }
+
+    // 프레임 중심이 포함된 화면(없으면 nil)
+    private func screenContaining(_ frame: NSRect) -> NSScreen? {
+        let c = NSPoint(x: frame.midX, y: frame.midY)
+        return NSScreen.screens.first { $0.frame.contains(c) }
+    }
+
     func hide() {
+        saveFrameByDisplay()   // 닫기 직전 "어느 모니터에 있었는지" 저장
         panel?.orderOut(nil)
     }
 }

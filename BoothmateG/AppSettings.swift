@@ -2,8 +2,10 @@
 //  AppSettings.swift
 //  BoothmateG
 //
-//  Version: 1.8.0
+//  Version: 1.9.0
 //  Changelog:
+//    1.9.0 - 통역 지침(interpretGuide, 자유 서술) + 단어 블랙리스트(blacklistWords) 저장 추가.
+//            systemInstruction에 합쳐 주입(번역 톤·인칭 지시 + 필러 생략).
 //    1.2.0 - 지원 언어 전체 + BCP-47 코드
 //    1.3.0 - 청중 언어(다국어 모드 타겟들) 저장 추가
 //    1.4.0 - 다국어 모드에서 음성 재생할 언어 1개 저장(multiAudioLang) 추가
@@ -40,6 +42,12 @@ final class AppSettings: ObservableObject {
     @AppStorage("glossaryPairJSON") var glossaryPairJSON: String = "[]"
     // v1.8.0: 적용할 글로서리 방식 (false = 기존 동일언어 치환, true = 새 번역쌍 방식)
     @AppStorage("useGlossaryPairMode") var useGlossaryPairMode: Bool = false
+
+    // v1.9.0: 통역 지침(자유 서술) — AI에게 번역 톤·격식·인칭 방향을 지시.
+    //  예: "청중은 정부 고위 관계자. 정중한 격식체로. 3인칭·2인칭은 '의장님'으로 통일."
+    @AppStorage("interpretGuide") var interpretGuide: String = ""
+    // v1.9.0: 단어 블랙리스트(생략할 필러) — 콤마 구분. 예: "음, 어, 저기, 그러니까요"
+    @AppStorage("blacklistWords") var blacklistWords: String = ""
 
     // 다국어 모드: 청중 언어 목록 (기본: 영어/중국어 간체/일본어)
     @AppStorage("audienceLangsJSON") var audienceLangsJSON: String = "[\"en\",\"zh-Hans\",\"ja\"]"
