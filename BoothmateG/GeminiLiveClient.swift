@@ -2,7 +2,7 @@
 //  GeminiLiveClient.swift
 //  BoothmateG
 //
-//  Version: 1.6.0
+//  Version: 1.7.0
 //  Changelog:
 //    1.0.0 - 최초 작성. Gemini 3.5 Live Translate WebSocket 클라이언트
 //    1.1.0 - echoTargetLanguage:false + 입력 감지 언어(onInputLanguage)
@@ -18,6 +18,8 @@
 //            · sessionResumption → 끊겨도 핸들로 같은 세션 이어가기(맥락 유지)
 //            · goAway 메시지 처리 → 서버가 끊기 전에 미리 새 연결로 교체(planned)
 //            · 계획된 교체(goAway)는 실패 카운터에 포함하지 않음
+//    1.7.0 - 행사 정보 systemInstruction 동적 주입: connect(eventInfo:)로 받아
+//            setup에서 용어집과 함께 주입. 행사정보 변경 시 재연결.
 //
 
 import Foundation
@@ -53,8 +55,11 @@ final class GeminiLiveClient: NSObject {
 
     // ── 용어집 주입 (v1.6.0) ──
     private var connGlossaryInstruction = ""  // 용어집에서 생성한 systemInstruction(없으면 빈 문자열)
+    
+    // ── 행사 정보 주입 (v1.7.0) ──
+    private var connEventInfo = EventInfo()   // 행사 정보 저장
 
-    func connect(apiKey: String, sourceLang: String, targetLang: String, glossaryInstruction: String = "") {
+    func connect(apiKey: String, sourceLang: String, targetLang: String, glossaryInstruction: String = "", eventInfo: EventInfo = EventInfo()) {
         guard !apiKey.isEmpty else {
             onError?("API 키가 비어있습니다")
             return
@@ -64,6 +69,7 @@ final class GeminiLiveClient: NSObject {
         connSourceLang = sourceLang
         connTargetLang = targetLang
         connGlossaryInstruction = glossaryInstruction
+        connEventInfo = eventInfo
         isActive = true
         isReconnecting = false
         reconnectAttempts = 0
@@ -177,9 +183,21 @@ final class GeminiLiveClient: NSObject {
 
         // 용어집 주입(v1.6.0): 등록된 용어가 있으면 systemInstruction으로 번역 단계에서 강제.
         //  비어있으면 주입하지 않음(기본 번역).
+        var systemText = ""
         if !connGlossaryInstruction.isEmpty {
-            setupInner["systemInstruction"] = ["parts": [["text": connGlossaryInstruction]]]
+            systemText += connGlossaryInstruction
             print("[BMG] 용어집 systemInstruction 주입(\(connGlossaryInstruction.count)자)")
+        }
+        
+        // 행사 정보 주입(v1.7.0): 행사 정보가 있으면 추가 주입
+        let eventInstruction = generateEventInstruction(connEventInfo)
+        if !eventInstruction.isEmpty {
+            systemText += "\n" + eventInstruction
+            print("[BMG] 행사 정보 systemInstruction 주입(\(eventInstruction.count)자)")
+        }
+        
+        if !systemText.isEmpty {
+            setupInner["systemInstruction"] = ["parts": [["text": systemText]]]
         }
         // 세션 재개: 핸들이 있으면 같은 세션 이어가기, 없으면 빈 값으로 기능 활성화
         if let handle = resumeHandle, !handle.isEmpty {
@@ -297,6 +315,44 @@ final class GeminiLiveClient: NSObject {
         if serverContent["turnComplete"] as? Bool == true {
             onTurnComplete?()
         }
+    }
+    
+    // ── v1.7.0 추가: 행사 정보 systemInstruction 생성 ──
+    private func generateEventInstruction(_ eventInfo: EventInfo) -> String {
+        guard !eventInfo.isEmpty else { return "" }
+        
+        var instruction = """
+        
+        === 행사 정보 (Event Information) ===
+        """
+        
+        if !eventInfo.eventName.en.isEmpty {
+            instruction += "\n행사명 | Event Name: \(eventInfo.eventName.ko) / \(eventInfo.eventName.en)"
+        }
+        if !eventInfo.venue.en.isEmpty {
+            instruction += "\n장소 | Venue: \(eventInfo.venue.ko) / \(eventInfo.venue.en)"
+        }
+        if !eventInfo.dateTime.en.isEmpty {
+            instruction += "\n일시 | Date/Time: \(eventInfo.dateTime.ko) / \(eventInfo.dateTime.en)"
+        }
+        
+        if !eventInfo.speakers.isEmpty {
+            instruction += "\n\n참석자 및 발표:\n"
+            for (i, speaker) in eventInfo.speakers.enumerated() {
+                instruction += """
+                \(i + 1). 직책: \(speaker.position.ko) / \(speaker.position.en)
+                   이름: \(speaker.name.ko) / \(speaker.name.en)
+                   발표제목: \(speaker.presentationTitle.ko) / \(speaker.presentationTitle.en)
+                
+                """
+            }
+        }
+        
+        instruction += """
+        위의 용어들은 번역 시 정확히 사용하시오.
+        """
+        
+        return instruction
     }
 }
 

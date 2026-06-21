@@ -2,8 +2,15 @@
 //  ContentView.swift
 //  BoothmateG
 //
-//  Version: 2.55.3
+//  Version: 2.56.2
 //  Changelog:
+//    2.56.2 - 메인 콘솔 정리: '용어집'(구버전) 버튼 숨김(#if false로 코드 보존, 되살리기 대비).
+//             '용어집2' → '글로서리 & 통역 세팅'으로 명칭 변경.
+//    2.56.1 - 행사 정보 버튼/시트 추가: 하단 1줄 '용어집2' 옆에 '행사 정보' 버튼.
+//             showEventInfo 토글 + EventInfoView 시트 연결.
+//    2.56.0 - 행사 정보 기능 추가: @State eventInfo + start/startMulti에서 connect()에 eventInfo 전달.
+//             GeminiLiveClient v1.7.0 + GlossaryEngine v1.4.0 + Dual/MultiTranslateClient v1.3.0과 통합.
+//             EventInfoView로 행사명/장소/일시/참석자 입력. 번역 시 행사 용어 자동 강제 적용.
 //    2.55.3 - 통역 지침·블랙리스트를 systemInstruction 빌더에 전달(단일·다국어).
 //    2.55.2 - 다국어 모드(multiClient)에도 용어집 systemInstruction 주입.
 //    2.55.1 - 시작 시 용어집(새 방식)을 GlossaryInstructionBuilder로 변환해 connect에 주입(번역 단계 강제).
@@ -94,6 +101,10 @@ struct ContentView: View {
     @State private var showInputSource: Bool = false
     @State private var showAudienceLangs: Bool = false
     @State private var showAudienceQR: Bool = false
+    
+    // v2.56.0: 행사 정보 상태
+    @State private var eventInfo = EventInfo()
+    @State private var showEventInfo: Bool = false
 
     @State private var isEditing: Bool = false
     @State private var frozenCurrentText: String? = nil  // v2.46.0: 편집 중 진행 자막 고정 스냅샷(단일)
@@ -155,6 +166,10 @@ struct ContentView: View {
             GlossaryPairView(settings: settings) { pairs in
                 settings.saveGlossaryPairs(pairs)
             }
+        }
+        // v2.56.0: 행사 정보 시트
+        .sheet(isPresented: $showEventInfo) {
+            EventInfoView(eventInfo: $eventInfo)
         }
         .sheet(isPresented: $showSettings) {
             ConsoleSettingsView(settings: settings, onExportTranscript: { exportCurrentTranscript() })
@@ -666,17 +681,28 @@ struct ContentView: View {
 
                     Divider().frame(height: 20)
 
+                    // v2.56.2: '용어집'(구버전) 버튼 숨김. 코드는 보존(나중에 되살릴 때 #if false → #if true).
+                    #if false
                     Button { showGlossary = true } label: {
                         HStack(spacing: 5) { Image(systemName: "character.book.closed"); Text("용어집") }.font(.body)
                     }
                     .buttonStyle(.plain)
+                    #endif
 
                     // v2.55.0: 새 방식(번역쌍 매칭) 용어집 버튼
+                    // v2.56.2: 명칭 '용어집2' → '글로서리 & 통역 세팅'
                     Button { showGlossaryPair = true } label: {
-                        HStack(spacing: 5) { Image(systemName: "character.book.closed.fill"); Text("용어집2") }.font(.body)
+                        HStack(spacing: 5) { Image(systemName: "character.book.closed.fill"); Text("글로서리 & 통역 세팅") }.font(.body)
                     }
                     .buttonStyle(.plain)
                     .help("새 방식: 원문어=표준표기 (예: patient=피험자). 원문 대조로 번역어를 통일")
+
+                    // v2.56.0: 행사 정보 버튼
+                    Button { showEventInfo = true } label: {
+                        HStack(spacing: 5) { Image(systemName: "calendar.badge.clock"); Text("행사 정보") }.font(.body)
+                    }
+                    .buttonStyle(.plain)
+                    .help("행사명/장소/일시/참석자(직책·이름·발표제목)를 등록. 번역 시 정확한 직책·이름으로 강제 반영")
 
                     Spacer()
                 }
@@ -925,7 +951,7 @@ struct ContentView: View {
                                                guide: settings.interpretGuide,
                                                blacklist: settings.blacklistWords)
             : ""
-        client.connect(apiKey: settings.geminiApiKey, langA: settings.targetLang, langB: settings.sourceLang, glossaryInstruction: glossaryInstruction)
+        client.connect(apiKey: settings.geminiApiKey, langA: settings.targetLang, langB: settings.sourceLang, glossaryInstruction: glossaryInstruction, eventInfo: eventInfo)
 
         do {
             try audio.start()
@@ -1026,7 +1052,7 @@ struct ContentView: View {
                                                guide: settings.interpretGuide,
                                                blacklist: settings.blacklistWords)
             : ""
-        multiClient.connect(apiKey: settings.geminiApiKey, sourceLang: settings.multiSourceLang, targets: targets, glossaryInstruction: multiGlossary)
+        multiClient.connect(apiKey: settings.geminiApiKey, sourceLang: settings.multiSourceLang, targets: targets, glossaryInstruction: multiGlossary, eventInfo: eventInfo)
 
         do {
             try audio.start()

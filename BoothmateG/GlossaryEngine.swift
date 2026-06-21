@@ -2,7 +2,7 @@
 //  GlossaryEngine.swift
 //  BoothmateG
 //
-//  Version: 1.3.0
+//  Version: 1.4.0
 //  Changelog:
 //    1.0.0 - 최초 작성. 번역 텍스트에 용어집 항목을 치환
 //    1.1.0 - normalize() 추가: 콤마 별칭 + 양방향. 각 칸 첫 단어를 대표 표기로 통일
@@ -12,6 +12,8 @@
 //            영어 별칭은 단어 경계 + 끝의 (s|es)를 선택적으로 매칭하므로
 //            "Net Zero"만 등록해도 "Net Zeros"/"Net Zeroes"까지 "Net Zero"로 통일.
 //            한국어 별칭은 조사 결합 특성상 기존 단순 치환 유지.
+//    1.4.0 - 행사 정보 기능 추가: EventInfo, Speaker 구조체 + 유사도 매칭(Levenshtein) +
+//            번역 후처리 함수 applyEventInfo(). systemInstruction 생성 함수 추가.
 //
 
 import Foundation
@@ -101,5 +103,156 @@ final class GlossaryEngine {
         let full = NSRange(text.startIndex..., in: text)
         let template = NSRegularExpression.escapedTemplate(for: canonical)
         return re.stringByReplacingMatches(in: text, options: [], range: full, withTemplate: template)
+    }
+
+    // ── v1.4.0 추가: 행사 정보 관련 함수들 ──────────────────────────────────
+    
+    // 번역 후처리: 행사 정보로 강제 치환 + 유사도 매칭
+    func applyEventInfo(to text: String, eventInfo: EventInfo) -> String {
+        var result = text
+        
+        // 각 참석자 정보 처리
+        for speaker in eventInfo.speakers {
+            // 케이스 1: "직책 이름" 조합으로 강제 치환
+            let combined = "\(speaker.position.en) \(speaker.name.en)"
+            let escapedEn = NSRegularExpression.escapedPattern(for: combined)
+            let pattern = "(?<![A-Za-z])(\(escapedEn))(?![A-Za-z])"
+            if let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
+                let full = NSRange(result.startIndex..., in: result)
+                result = re.stringByReplacingMatches(in: result, options: [], range: full, withTemplate: combined)
+            }
+            
+            // 케이스 2: 직책만 나왔으면 이름 추가
+            if result.contains(speaker.position.en) && !result.contains(speaker.name.en) {
+                let escapedPos = NSRegularExpression.escapedPattern(for: speaker.position.en)
+                let posPattern = "(?<![A-Za-z])\(escapedPos)(?![A-Za-z])"
+                if let re = try? NSRegularExpression(pattern: posPattern, options: [.caseInsensitive]) {
+                    let full = NSRange(result.startIndex..., in: result)
+                    let template = NSRegularExpression.escapedTemplate(for: combined)
+                    result = re.stringByReplacingMatches(in: result, options: [], range: full, withTemplate: template)
+                }
+            }
+            
+            // 케이스 3: 비슷한 이름 (유사도 > 0.75)
+            if similarity(result, speaker.name.en) > 0.75 {
+                result = result.replacingOccurrences(of: speaker.name.en, with: speaker.name.en, options: [.caseInsensitive])
+            }
+        }
+        
+        return result
+    }
+    
+    // systemInstruction 생성: 행사 정보를 명령문으로
+    func generateEventInstruction(eventInfo: EventInfo) -> String {
+        var instruction = """
+        
+        === 행사 정보 (Event Information) ===
+        """
+        
+        if !eventInfo.eventName.en.isEmpty {
+            instruction += "\n행사명 | Event Name: \(eventInfo.eventName.ko) / \(eventInfo.eventName.en)"
+        }
+        if !eventInfo.venue.en.isEmpty {
+            instruction += "\n장소 | Venue: \(eventInfo.venue.ko) / \(eventInfo.venue.en)"
+        }
+        if !eventInfo.dateTime.en.isEmpty {
+            instruction += "\n일시 | Date/Time: \(eventInfo.dateTime.ko) / \(eventInfo.dateTime.en)"
+        }
+        
+        if !eventInfo.speakers.isEmpty {
+            instruction += "\n\n참석자 및 발표:\n"
+            for (i, speaker) in eventInfo.speakers.enumerated() {
+                instruction += """
+                \(i + 1). 직책: \(speaker.position.ko) / \(speaker.position.en)
+                   이름: \(speaker.name.ko) / \(speaker.name.en)
+                   발표제목: \(speaker.presentationTitle.ko) / \(speaker.presentationTitle.en)
+                
+                """
+            }
+        }
+        
+        instruction += """
+        위의 용어들은 번역 시 정확히 사용하시오.
+        """
+        
+        return instruction
+    }
+    
+    // 유사도 계산 (0.0~1.0)
+    private func similarity(_ s1: String, _ s2: String) -> Double {
+        let longer = s1.count > s2.count ? s1 : s2
+        let shorter = s1.count > s2.count ? s2 : s1
+        
+        if longer.isEmpty { return 1.0 }
+        
+        let editDistance = levenshteinDistance(longer, shorter)
+        return Double(longer.count - editDistance) / Double(longer.count)
+    }
+    
+    // Levenshtein distance 계산
+    private func levenshteinDistance(_ s1: String, _ s2: String) -> Int {
+        let s1 = Array(s1), s2 = Array(s2)
+        let m = s1.count, n = s2.count
+        
+        var dp = Array(repeating: Array(repeating: 0, count: n + 1), count: m + 1)
+        
+        for i in 0...m { dp[i][0] = i }
+        for j in 0...n { dp[0][j] = j }
+        
+        for i in 1...m {
+            for j in 1...n {
+                if s1[i-1] == s2[j-1] {
+                    dp[i][j] = dp[i-1][j-1]
+                } else {
+                    dp[i][j] = 1 + min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1])
+                }
+            }
+        }
+        
+        return dp[m][n]
+    }
+}
+
+// ── v1.4.0 추가: 행사 정보 데이터 구조 ──────────────────────────────────
+
+struct BilingualText: Codable, Equatable {
+    var ko: String = ""
+    var en: String = ""
+    
+    init(_ ko: String = "", _ en: String = "") {
+        self.ko = ko
+        self.en = en
+    }
+}
+
+struct Speaker: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var position: BilingualText = BilingualText()
+    var name: BilingualText = BilingualText()
+    var presentationTitle: BilingualText = BilingualText()
+    
+    enum CodingKeys: String, CodingKey {
+        case id, position, name, presentationTitle
+    }
+}
+
+struct EventInfo: Codable, Equatable {
+    var eventName: BilingualText = BilingualText()
+    var venue: BilingualText = BilingualText()
+    var dateTime: BilingualText = BilingualText()
+    var speakers: [Speaker] = []
+    
+    mutating func reset() {
+        eventName = BilingualText()
+        venue = BilingualText()
+        dateTime = BilingualText()
+        speakers = []
+    }
+    
+    var isEmpty: Bool {
+        eventName.ko.isEmpty && eventName.en.isEmpty &&
+        venue.ko.isEmpty && venue.en.isEmpty &&
+        dateTime.ko.isEmpty && dateTime.en.isEmpty &&
+        speakers.isEmpty
     }
 }

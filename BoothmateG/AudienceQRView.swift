@@ -2,13 +2,16 @@
 //  AudienceQRView.swift
 //  BoothmateG
 //
-//  Version: 2.0.0
+//  Version: 2.2.0
 //  Changelog:
+//    2.2.0 - 파인더 cornerWidth/Height 극대화(2.1→2.8)로 완전히 둥글게(거의 원형).
+//            점 inset 5%→3%로 줄여 더 큰 동그란 원 패턴으로 심플함 강조.
+//            길거리 현수막 스타일 QR 완성. 테마색·인식률 유지.
+//    2.1.0 - 파인더 cornerWidth/Height 증가(1.8→2.1, 1.2→1.5, 0.8→1.0)로 더 둥근 느낌.
+//            인식률 유지하며 길거리 현수막 스타일 QR에 가깝게 시각화. 테마색 추출·자동 어둡게 보정 유지.
 //    2.0.0 - 위쪽 띠 로고(logoPath)에서 테마색 자동 추출 → QR 데이터 점·파인더 색에 적용
 //            (밝으면 인식 위해 자동으로 어둡게 보정, 로고 없으면 기본 진한 파랑).
 //            파인더 더 둥글게 + 파인더는 테마색을 살짝 더 진하게(포인트). 가운데 앱 로고는 색과 무관.
-//    1.9.0 - 디자인 QR 인식 실패 수정: 격자(모듈) 파싱 정확화(여백 자동 측정 → 칸 개수 정확 계산).
-//            안정 우선으로 점 크게(inset 5%), 파인더 살짝만 둥글게, 진한 단색(파랑). 그라데이션 제거.
 //    1.8.0 - 디자인 QR: 둥근 점 + 둥근 모서리(파인더) + 브랜드 그라데이션(파랑→초록).
 //            중앙 로고는 넣으면 표시(둥근 흰 배경), 안 넣으면 QR만. 오류정정 H 유지.
 //    1.3.0 - 중앙 그림 300 → 200px로 축소(스캔이 안 되던 문제 해결).
@@ -450,32 +453,32 @@ func makeAudienceQRImage(link: String, centerPath: String, logoPath: String, cap
             (c < 7 && r < 7) || (c >= n - 7 && r < 7) || (c < 7 && r >= n - 7)
         }
 
-        // 데이터 점(둥근 원) — 크게(inset 5%), 파인더 제외
+        // 데이터 점(더 큰 둥근 원) — inset 3%, 파인더 제외, 패턴 심플화
         ctx.setFillColor(brand.cgColor)
         for row in 0..<n {
             for col in 0..<n {
                 guard isDark(col, row), !inFinder(col, row) else { continue }
                 let x = CGFloat(col) * module
                 let y = qrPx - CGFloat(row + 1) * module
-                let inset = module * 0.05
+                let inset = module * 0.03
                 ctx.fillEllipse(in: CGRect(x: x + inset, y: y + inset,
                                            width: module - inset*2, height: module - inset*2))
             }
         }
 
-        // 파인더 3개 — 더 둥글게(둥근 사각형 한계 내) + 포인트색(finderColor)
+        // 파인더 3개 — 완전히 둥글게(거의 원형) + 포인트색(finderColor)
         func drawFinder(_ cc: Int, _ cr: Int) {
             let x = CGFloat(cc) * module
             let y = qrPx - CGFloat(cr) * module - module * 7
             let outer = CGRect(x: x, y: y, width: module*7, height: module*7)
             ctx.setFillColor(finderColor.cgColor)
-            ctx.addPath(CGPath(roundedRect: outer, cornerWidth: module*1.8, cornerHeight: module*1.8, transform: nil)); ctx.fillPath()
+            ctx.addPath(CGPath(roundedRect: outer, cornerWidth: module*2.8, cornerHeight: module*2.8, transform: nil)); ctx.fillPath()
             let mid = outer.insetBy(dx: module, dy: module)
             ctx.setFillColor(NSColor.white.cgColor)
-            ctx.addPath(CGPath(roundedRect: mid, cornerWidth: module*1.2, cornerHeight: module*1.2, transform: nil)); ctx.fillPath()
+            ctx.addPath(CGPath(roundedRect: mid, cornerWidth: module*2.0, cornerHeight: module*2.0, transform: nil)); ctx.fillPath()
             let inner = outer.insetBy(dx: module*2, dy: module*2)
             ctx.setFillColor(finderColor.cgColor)
-            ctx.addPath(CGPath(roundedRect: inner, cornerWidth: module*0.8, cornerHeight: module*0.8, transform: nil)); ctx.fillPath()
+            ctx.addPath(CGPath(roundedRect: inner, cornerWidth: module*1.3, cornerHeight: module*1.3, transform: nil)); ctx.fillPath()
         }
         drawFinder(0, 0)
         drawFinder(n - 7, 0)
