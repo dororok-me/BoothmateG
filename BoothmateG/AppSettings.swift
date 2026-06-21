@@ -2,8 +2,10 @@
 //  AppSettings.swift
 //  BoothmateG
 //
-//  Version: 1.9.0
+//  Version: 1.10.0
 //  Changelog:
+//    1.10.0 - 단위·환율 자동 변환 토글(convertUnitsCurrency) 추가. 단일 언어 모드 번역문에
+//             단위/환율 환산을 괄호로 덧붙임. (UnitConverter/CurrencyConverter 연동)
 //    1.9.0 - 통역 지침(interpretGuide, 자유 서술) + 단어 블랙리스트(blacklistWords) 저장 추가.
 //            systemInstruction에 합쳐 주입(번역 톤·인칭 지시 + 필러 생략).
 //    1.2.0 - 지원 언어 전체 + BCP-47 코드
@@ -62,6 +64,9 @@ final class AppSettings: ObservableObject {
     @AppStorage("fishLang") var fishLang: String = ""            // Fish로 내보낼 언어 1개 (빈 값 = 끄기)
     @AppStorage("fishReferenceId") var fishReferenceId: String = ""  // Fish 음성 모델 ID (빈 값 = 기본 음성)
     @AppStorage("fishModel") var fishModel: String = "s1"        // Fish 모델 (s1 / s2-pro)
+
+    // v1.10.0: 단위·환율 자동 변환 (단일 언어 모드). 번역문에 "5마일(8km)", "$1,000(1,400만원)" 식으로 덧붙임.
+    @AppStorage("convertUnitsCurrency") var convertUnitsCurrency: Bool = false
 
     func loadGlossary() -> [GlossaryItem] {
         guard let data = glossaryJSON.data(using: .utf8),

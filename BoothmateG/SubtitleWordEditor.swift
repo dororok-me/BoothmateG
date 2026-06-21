@@ -2,8 +2,10 @@
 //  SubtitleWordEditor.swift
 //  BoothmateG
 //
-//  Version: 1.5.0
+//  Version: 1.6.0
 //  Changelog:
+//    1.6.0 - 진행 중(인식 중) 자막 굵기를 확정 자막과 동일하게: bold일 때 .medium → .bold.
+//            (굵게 토글 시 진행 중 자막도 확정 자막처럼 확실히 굵어지게. 편집창 폰트도 일관 적용.)
 //    1.0.0 - 최초 작성.
 //            - FlowLayout: 단어를 줄바꿈하며 배치하는 흐름 레이아웃
 //            - EditableSubtitleText: 단어 더블클릭 → 그 단어가 전체선택된 수정 팝오버
@@ -106,7 +108,7 @@ struct EditableSubtitleText: View {
         FlowLayout(spacing: wordSpacing, lineSpacing: 4) {
             ForEach(Array(tokens.enumerated()), id: \.offset) { idx, word in
                 Text(word)
-                    .font(.system(size: fontSize, weight: bold ? .medium : .regular))
+                    .font(.system(size: fontSize, weight: bold ? .bold : .regular))
                     .foregroundStyle(color)
                     .padding(.horizontal, 1)
                     .contentShape(Rectangle())
@@ -173,7 +175,7 @@ struct AutoSelectTextField: NSViewRepresentable {
 
         let tv = NSTextView()
         tv.delegate = context.coordinator
-        tv.font = .systemFont(ofSize: fontSize, weight: bold ? .medium : .regular)
+        tv.font = .systemFont(ofSize: fontSize, weight: bold ? .bold : .regular)
         tv.isRichText = false
         tv.isEditable = true
         tv.isSelectable = true

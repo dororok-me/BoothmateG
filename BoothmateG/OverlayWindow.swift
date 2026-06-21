@@ -2,8 +2,16 @@
 //  OverlayWindow.swift
 //  BoothmateG
 //
-//  Version: 1.21.0
+//  Version: 1.25.0
 //  Changelog:
+//    1.25.0 - 상단 페이드 폭 확대: 완전 불투명 도달 지점 0.18→0.32, 중간 단계 촘촘히.
+//             살짝 보이며 끊기던 잔상 제거. 맨 끝단은 완전 투명.
+//    1.24.0 - 상단 페이드 마스크 최초 추가.
+//             세그먼트가 수백 개로 누적될 때 오버레이 렌더링 과부하로 앱이 다운되던 문제 대응.
+//             (전사문에는 전체가 저장되므로 통역 기록은 온전)
+//    1.22.0 - 표시용 후처리 클로저(displayPolish) 추가: ContentView가 polish(용어집+단위+환율)를
+//             넘기면 오버레이 확정/진행 자막에도 환산이 붙음(화면·청중과 통일). 편집 진입은 미적용.
+//             show/toggle에 displayPolish 파라미터(기본 nil → 기존 동작 보존).
 //    1.21.0 - 외부 디스플레이 복원 견고화: 디스플레이 고유 ID(CGDirectDisplayID)+모니터 내 상대 위치 저장.
 //             같은 모니터를 찾아 복원, 없으면 절대좌표→메인화면 폴백. 이동/리사이즈마다 저장(크래시 대비).
 //    1.20.0 - 오버레이 창 위치·크기 기억(setFrameAutosaveName): 이동/리사이즈 시 자동 저장,
@@ -97,11 +105,11 @@ final class OverlayWindowController {
     private let uiState = OverlayUIState()
     var isVisible: Bool { panel?.isVisible ?? false }
 
-    func toggle(store: SubtitleStore, glossary: GlossaryEngine, mainWindow: NSWindow?) {
-        if isVisible { hide() } else { show(store: store, glossary: glossary, mainWindow: mainWindow) }
+    func toggle(store: SubtitleStore, glossary: GlossaryEngine, mainWindow: NSWindow?, displayPolish: ((String) -> String)? = nil) {
+        if isVisible { hide() } else { show(store: store, glossary: glossary, mainWindow: mainWindow, displayPolish: displayPolish) }
     }
 
-    func show(store: SubtitleStore, glossary: GlossaryEngine, mainWindow: NSWindow?) {
+    func show(store: SubtitleStore, glossary: GlossaryEngine, mainWindow: NSWindow?, displayPolish: ((String) -> String)? = nil) {
         var didCreate = false
         var restoredFrame = false
         if panel == nil {
@@ -111,7 +119,7 @@ final class OverlayWindowController {
 
             let view = OverlayContentView(store: store, glossary: glossary, uiState: uiState, onClose: { [weak self] in
                 self?.hide()
-            })
+            }, displayPolish: displayPolish)
             let hosting = NSHostingController(rootView: view)
             // 콘텐츠의 고유 크기가 창 크기를 바꾸지 못하게 잠금
             // (설정 패널을 열어도 창이 패널 높이만큼 늘어나던 문제 방지)
@@ -409,6 +417,9 @@ struct OverlayContentView: View {
     let glossary: GlossaryEngine            // v1.5.0: 표시 직전 글로서리 적용
     @ObservedObject var uiState: OverlayUIState
     var onClose: () -> Void
+    // v1.22.0: 표시용 후처리(단위·환율 변환 등). 기본값은 변환 없음(빈 클로저면 입력 그대로).
+    //          ContentView가 polish를 넘기면 화면·청중과 동일하게 환산이 붙음. 편집 진입에는 미적용.
+    var displayPolish: ((String) -> String)? = nil
 
     // ── 설정 (AppStorage로 앱 종료 후에도 유지) ──
     @AppStorage("ov_bgMode")       private var bgMode: String = "obs"
@@ -454,7 +465,9 @@ struct OverlayContentView: View {
                         VStack(spacing: 0) {
                             Spacer(minLength: 0)
                             LazyVStack(alignment: .leading, spacing: lineSpacing) {
-                                ForEach(store.segments) { seg in
+                                // v1.23.0: 긴 세션에서 세그먼트가 수백 개로 쌓이면 렌더링 과부하로
+                                //          다운될 수 있어, 화면에는 최근 80개만 표시(기록 전사문은 전체 저장).
+                                ForEach(store.segments.suffix(80)) { seg in
                                     overlayRow(seg).id(seg.id)
                                 }
                                 // 현재 진행 중 자막 (글로서리 적용)
@@ -463,7 +476,7 @@ struct OverlayContentView: View {
                                 //          이후 글자 늘어남이 수정창에 영향 없게 함.
                                 if !store.currentTarget.isEmpty {
                                     EditableSubtitleText(
-                                        text: glossary.normalize(store.currentTarget),
+                                        text: (displayPolish ?? glossary.normalize)(store.currentTarget),
                                         fontSize: fontSize,
                                         bold: fontBold,
                                         color: Color(hex: fontColorHex),
@@ -501,6 +514,22 @@ struct OverlayContentView: View {
                         .frame(minHeight: geo.size.height)
                     }
                     .clipped()
+                    // v1.25.0: 상단 페이드 마스크. 페이드 구간을 넓혀(완전 불투명 도달 0.18→0.32)
+                    //          위로 갈수록 더 길게 서서히 사라지게 → 끊겨 보이던 잔상 제거.
+                    //          맨 끝단(0.0)은 완전 투명(.clear)으로 확실히 사라짐.
+                    .mask(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .clear,                location: 0.0),
+                                .init(color: .black.opacity(0.05),  location: 0.08),
+                                .init(color: .black.opacity(0.25),  location: 0.16),
+                                .init(color: .black.opacity(0.6),   location: 0.24),
+                                .init(color: .black,                location: 0.32),
+                                .init(color: .black,                location: 1.0)
+                            ],
+                            startPoint: .top, endPoint: .bottom
+                        )
+                    )
                     .onChange(of: store.segments.count) { _, _ in
                         if !isCurrentEditing { withAnimation { proxy.scrollTo("ov_current", anchor: .bottom) } }
                     }
@@ -607,7 +636,7 @@ struct OverlayContentView: View {
                 .onExitCommand { editingID = nil }
             } else {
                 // 글로서리 적용된 텍스트를 표시 (저장소 원본은 그대로 유지)
-                Text(spacedAttr(glossary.normalize(seg.targetText)))
+                Text(spacedAttr((displayPolish ?? glossary.normalize)(seg.targetText)))
                     .font(.system(size: fontSize, weight: fontBold ? .bold : .regular))
                     .foregroundColor(Color(hex: fontColorHex))
                     .modifier(StrokeModifier(enabled: textStroke))

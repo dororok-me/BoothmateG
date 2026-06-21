@@ -2,8 +2,15 @@
 //  ContentView.swift
 //  BoothmateG
 //
-//  Version: 2.56.2
+//  Version: 2.57.5
 //  Changelog:
+//    2.57.5 - [치명 버그 수정] 진행 중 자막 편집을 저장 없이 닫으면 editingHold가 true로 남아
+//             자동 확정이 영구 보류되며 콘솔 번역이 멈추던 문제 수정. 편집 종료(isEditing=false)
+//             시 editingHold·frozen 스냅샷을 안전 해제(단일/다국어 모두). 오버레이는 영향 없었음.
+//    2.57.4 - 정지 시 드문 다운 방지(isStopping)·면적 제거, 환율만 유지.
+//    2.57.0 - 단위·환율 자동 변환(단일 언어 모드): polish() 헬퍼로 용어집+단위+환율 통합.
+//             콘솔 확정/진행 자막, 청중 송출, 전사문에 적용. 시작 시 환율 API 갱신.
+//             settings.convertUnitsCurrency 토글 ON일 때만. 다국어 모드는 미적용(영한 전용).
 //    2.56.2 - 메인 콘솔 정리: '용어집'(구버전) 버튼 숨김(#if false로 코드 보존, 되살리기 대비).
 //             '용어집2' → '글로서리 & 통역 세팅'으로 명칭 변경.
 //    2.56.1 - 행사 정보 버튼/시트 추가: 하단 1줄 '용어집2' 옆에 '행사 정보' 버튼.
@@ -78,6 +85,11 @@ struct ContentView: View {
     @State private var multiClient = MultiTranslateClient()
     @State private var glossary = GlossaryEngine()
     @State private var audioPlayer = TranslatedAudioPlayer()
+    // v2.57.0: 단위·환율 변환(단일 언어 모드). 환율은 앱 시작 시 API로 갱신.
+    @StateObject private var currencyConverter = CurrencyConverter()
+    // v2.57.4: 정지 진행 중 표시. 정지 직후 잔여 화면 갱신에서 환율 변환을 건너뛰어
+    //          @MainActor 변환과 정지 정리 작업이 겹치며 나는 드문 다운을 방지.
+    @State private var isStopping = false
     @ObservedObject private var relay = FirebaseRelay.shared
     @State private var audioBroadcaster = AudioBroadcaster()
     @State private var showHostLogin = false
@@ -271,7 +283,7 @@ struct ContentView: View {
 
                 // v2.37.0: 순서 변경 — 시작 · 오버레이 · 음성지원 · 자막리셋 · 카운터
                 overlayToggleButton(isOn: overlayController.isVisible, color: .green, help: "오버레이") {
-                    overlayController.toggle(store: subtitles, glossary: glossary, mainWindow: NSApp.keyWindow)
+                    overlayController.toggle(store: subtitles, glossary: glossary, mainWindow: NSApp.keyWindow, displayPolish: { polish($0) })
                 }
 
                 audioSupportButton
@@ -566,6 +578,14 @@ struct ContentView: View {
                                 }
                             )
                             .italic()
+                            // v2.57.5: 다국어도 동일 — 저장 없이 편집 닫아도 보류 해제(번역 멈춤 방지)
+                            .onChange(of: isEditing) { _, editing in
+                                if !editing {
+                                    multiStore.editingHold = false
+                                    frozenMultiText = nil
+                                    frozenMultiSource = nil
+                                }
+                            }
                         }
                     }
                 }
@@ -608,7 +628,9 @@ struct ContentView: View {
             srcFontSize: CGFloat(sourceFont),
             isEditing: $isEditing,
             onCommitSource: { subtitles.updateSource(id: segment.id, newText: $0) },
-            onCommitTarget: { subtitles.updateTarget(id: segment.id, newText: $0) }
+            onCommitTarget: { subtitles.updateTarget(id: segment.id, newText: $0) },
+            convert: settings.convertUnitsCurrency,
+            currencyConverter: isStopping ? nil : currencyConverter
         )
         .id(segment.id)
     }
@@ -627,7 +649,7 @@ struct ContentView: View {
                     // 더블클릭 시점 텍스트를 고정(frozen)해 백그라운드 인식이 계속돼도 수정창이 흔들리지 않게 함.
                     // 확정은 저장(onCommit) 시점에 수행 → 더블클릭 직후 뷰가 사라져 팝오버가 닫히는 문제 방지.
                     EditableSubtitleText(
-                        text: glossary.normalize(frozenCurrentText ?? subtitles.currentTarget),
+                        text: polish(frozenCurrentText ?? subtitles.currentTarget),
                         fontSize: CGFloat(targetFont),
                         bold: false,
                         color: .secondary.opacity(0.7),
@@ -648,6 +670,15 @@ struct ContentView: View {
                         }
                     )
                     .italic()
+                    // v2.57.5: 진행 중 자막 편집을 저장 없이 닫아도(팝오버 외부 클릭 등)
+                    //          editingHold가 true로 남아 자동 확정이 영구 보류되며 콘솔 번역이
+                    //          멈추던 치명 버그 수정. 편집 종료(isEditing=false) 시 보류·고정 해제.
+                    .onChange(of: isEditing) { _, editing in
+                        if !editing {
+                            subtitles.editingHold = false
+                            frozenCurrentText = nil
+                        }
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -832,13 +863,30 @@ struct ContentView: View {
         statusMessage = "📡 청중 송출 중"
     }
 
-    // 단일 모드 자막 송출
+    // 단일 모드 자막 후처리. 용어집 정규화 후, 토글이 켜져 있으면 환율 변환을 덧붙임.
+    // v2.57.3: 면적(UnitConverter) 제거 — 한글 큰 숫자 번역(2백만 제곱미터 등) 미지원 이슈로 보류.
+    //          환율(CurrencyConverter)만 유지. UnitConverter는 호출 안 함(파일은 보존).
+    //          (CurrencyConverter는 @MainActor → 메인에서 호출되는 경로에서만 사용)
+    private func polish(_ text: String) -> String {
+        let normalized = glossary.normalize(text)
+        guard settings.convertUnitsCurrency else { return normalized }
+        // v2.57.4: 정지 정리 중에는 @MainActor 환율 변환을 건너뜀(겹침 다운 방지).
+        if isStopping { return normalized }
+        return currencyConverter.applyConversion(to: normalized)
+    }
+
+    // v2.57.3: 전사문 저장 전용. 백그라운드 저장과 @MainActor 충돌을 피하려 환율 제외.
+    //          면적(UnitConverter)도 보류로 제거 → 전사문은 용어집 정규화만 적용.
+    private func polishForArchive(_ text: String) -> String {
+        return glossary.normalize(text)
+    }
+
     private func relaySingle() {
         guard relay.active else { return }
         // 청중에게도 용어집 적용된 텍스트를 보냄 (오버레이/콘솔과 동일하게 통일)
-        let lines = Array(subtitles.segments.map { glossary.normalize($0.targetText) }.suffix(60))
+        let lines = Array(subtitles.segments.map { polish($0.targetText) }.suffix(60))
         relay.updateLive(lang: settings.targetLang,
-                         current: glossary.normalize(subtitles.currentTarget),
+                         current: polish(subtitles.currentTarget),
                          lines: lines)
     }
     // 다국어 모드 자막 송출 (언어 1개)
@@ -912,6 +960,8 @@ struct ContentView: View {
         guard !settings.geminiApiKey.isEmpty else {
             statusMessage = "❌ 설정에서 API 키를 입력하세요"; return
         }
+        // v2.57.0: 단위·환율 변환이 켜져 있으면 최신 환율을 받아옴(시작 때 1회).
+        if settings.convertUnitsCurrency { currencyConverter.fetchRates() }
         statusMessage = "연결 중..."
 
         client.onConnected = { DispatchQueue.main.async { self.statusMessage = "✅ 연결됨" } }
@@ -968,6 +1018,8 @@ struct ContentView: View {
     }
 
     private func stop() {
+        // v2.57.4: 정지 정리 동안 환율 변환 차단(겹침 다운 방지). 끝에서 해제.
+        isStopping = true
         // v2.52.0: 정지 시작 시 Fish 콜백 먼저 끊기 (finalizeTurn이 새 Fish 호출을 트리거하지 않게)
         subtitles.onSegmentCommitted = nil
         isRunning = false
@@ -994,6 +1046,8 @@ struct ContentView: View {
         stopAudioTimeout()            // v2.36.0
         sessionStart = nil
         statusMessage = "정지됨"
+        // v2.57.4: 정지 정리 완료 후 다음 런루프에 환율 변환 재개(잔여 화면 갱신 보호)
+        DispatchQueue.main.async { self.isStopping = false }
     }
 
     // ── 다국어 시작/정지 ──
@@ -1204,13 +1258,13 @@ struct ContentView: View {
             // 확정된 세그먼트
             for seg in subtitles.segments {
                 if !seg.sourceText.isEmpty { lines.append("· \(seg.sourceText)") }
-                if !seg.targetText.isEmpty { lines.append(glossary.normalize(seg.targetText)) }
+                if !seg.targetText.isEmpty { lines.append(polishForArchive(seg.targetText)) }
                 lines.append("")
             }
             // 아직 확정 안 된 진행 중 자막
             if !subtitles.currentSource.isEmpty || !subtitles.currentTarget.isEmpty {
                 if !subtitles.currentSource.isEmpty { lines.append("· \(subtitles.currentSource)") }
-                if !subtitles.currentTarget.isEmpty { lines.append(glossary.normalize(subtitles.currentTarget)) }
+                if !subtitles.currentTarget.isEmpty { lines.append(polishForArchive(subtitles.currentTarget)) }
                 lines.append("")
             }
         }
@@ -1255,6 +1309,20 @@ struct SegmentRow: View {
     @Binding var isEditing: Bool
     var onCommitSource: (String) -> Void = { _ in }
     var onCommitTarget: (String) -> Void = { _ in }
+    // v2.57.0: 단위·환율 변환(단일 언어 모드 전용, 기본 꺼짐). convert=true일 때만 적용.
+    var convert: Bool = false
+    var currencyConverter: CurrencyConverter? = nil
+
+    // 용어집 정규화 + (옵션) 환율 변환
+    // v2.57.4: 면적(UnitConverter) 제거 — 환율만 적용.
+    private func finishedTarget(_ text: String) -> String {
+        let normalized = glossary.normalize(text)
+        guard convert else { return normalized }
+        if let cc = currencyConverter {
+            return cc.applyConversion(to: normalized)
+        }
+        return normalized
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -1267,7 +1335,7 @@ struct SegmentRow: View {
             }
             if !segment.targetText.isEmpty {
                 EditableSubtitleText(
-                    text: glossary.normalize(segment.targetText),
+                    text: finishedTarget(segment.targetText),
                     fontSize: fontSize, bold: true, color: .primary,
                     isEditing: $isEditing, onCommit: onCommitTarget
                 )

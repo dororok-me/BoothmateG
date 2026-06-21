@@ -2,8 +2,9 @@
 //  ConsoleSettingsView.swift
 //  BoothmateG
 //
-//  Version: 1.4.0
+//  Version: 1.5.0
 //  Changelog:
+//    1.5.0 - 단위·환율 자동 변환 토글(convertUnitsCurrency) UI 추가. 번역 음성 재생 토글 아래.
 //    1.3.0 - Fish Audio TTS 설정 섹션 추가(켜기/언어/API키/음성ID). 전체 ScrollView화.
 //    1.4.0 - 음성 입력 자동 중지 Picker 추가(끄기/1/3/5/10분). 높이 760.
 //  Changelog:
@@ -77,6 +78,20 @@ struct ConsoleSettingsView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "speaker.wave.2.fill")
                     Text("번역 음성 재생")
+                }
+            }
+            .toggleStyle(.switch)
+
+            // ── 단위·환율 자동 변환 (단일 언어 모드) ──  v1.5.0
+            Toggle(isOn: $settings.convertUnitsCurrency) {
+                HStack(spacing: 6) {
+                    Image(systemName: "ruler.fill")
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("단위·환율 자동 변환")
+                        Text("예: 5마일(8km), $1,000(1,400만원) · 영한 단일 언어만")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             .toggleStyle(.switch)
