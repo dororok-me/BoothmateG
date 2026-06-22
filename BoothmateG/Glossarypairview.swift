@@ -2,8 +2,12 @@
 //  GlossaryPairView.swift
 //  BoothmateG
 //
-//  Version: 2.2.1
+//  Version: 2.4.1
 //  Changelog:
+//    2.4.1 - 유사어란 안내/placeholder에 영어 별칭(음차 오인식) 등록 가능 명시.
+//    2.4.0 - 각 용어 카드에 유사어(sourceAliases) 입력란 추가. 음성인식이 고유명사를 잘못 들어도
+//            (예: 천궁2호→전군2호) 별칭이 잡히면 용어 발동. 콤마 구분 입력 → 카드별 저장/로드.
+//    2.3.0 - 블랙리스트 저장을 줄바꿈(\n) 구분 + 공백 보존으로 변경.
 //    1.7.0 - 엔터(Return)로도 저장: 저장 버튼에 .defaultAction 단축키 지정.
 //    1.6.0 - 저장=빈 유사표현 AI 자동생성 후 저장, 창은 유지(닫히지 않음).
 //            닫기는 우상단 X + 하단 '닫기' 버튼으로만. 글자·버튼·창 크기 확대(접근성).
@@ -49,6 +53,7 @@ struct GlossaryPairView: View {
         var source: String = ""        // 원문어 (예: patient)
         var canonical: String = ""     // 타겟 표준표기 (예: 피험자)
         var learnedText: String = ""   // 번역어 캐시 (콤마 구분 문자열, 예: "환자, 환자분")
+        var aliasText: String = ""     // v2.4.0: 유사어/오인식 표기 (콤마 구분, 예: "전군2호, 천궁 이호")
     }
 
     // 블랙리스트(필러) 항목 모델 — 박스 하나 = 필러 하나
@@ -71,9 +76,9 @@ struct GlossaryPairView: View {
     // 현재 편집 내용을 비교용 문자열로 (용어집 + 통역 지침 + 블랙리스트)
     private var currentSnapshot: String {
         let pairs = drafts.map {
-            "\($0.source.trimmingCharacters(in: .whitespaces))|\($0.canonical.trimmingCharacters(in: .whitespaces))|\($0.learnedText.trimmingCharacters(in: .whitespaces))"
+            "\($0.source.trimmingCharacters(in: .whitespaces))|\($0.canonical.trimmingCharacters(in: .whitespaces))|\($0.learnedText.trimmingCharacters(in: .whitespaces))|\($0.aliasText.trimmingCharacters(in: .whitespaces))"
         }.joined(separator: "\n")
-        let fillerStr = fillers.map { $0.word.trimmingCharacters(in: .whitespaces) }.joined(separator: ",")
+        let fillerStr = fillers.map { $0.word }.filter { !$0.isEmpty }.joined(separator: "\n")
         return pairs + "\n##GUIDE##\n" + settings.interpretGuide + "\n##BLACK##\n" + fillerStr
     }
     // 저장할 변경이 있는가
@@ -238,7 +243,7 @@ struct GlossaryPairView: View {
     private var blacklistTab: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("등록한 단어를 통역에서 딱 그대로 생략합니다. ‘음, 어, 저기’ 같은 명확한 군더더기에 쓰세요. 등록한 표현만 정확히 빠지며(유사어로 확대 안 됨), ‘마음’의 ‘음’ 같은 단어 일부는 보호됩니다. 톤·민감 표현 처리는 ‘통역 지침’ 탭을 쓰세요.")
+                Text("등록한 표현을 자막에서 글자 그대로 제거합니다. 필러는 보통 쉼표와 공백을 달고 나오므로, ‘어, ’처럼 쉼표와 뒤 공백까지 포함해 등록하세요(예: ‘어, ’ ‘음, ’ ‘저기, ’). 그러면 ‘마음’ ‘먹음’의 ‘음’은 패턴이 달라 안전하게 보호됩니다. 톤·민감 표현은 ‘통역 지침’ 탭을 쓰세요.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -256,7 +261,7 @@ struct GlossaryPairView: View {
                 VStack(spacing: 8) {
                     ForEach($fillers) { $f in
                         HStack(spacing: 8) {
-                            TextField("필러 (예: 음)", text: $f.word)
+                            TextField("필러 (예: 어,  ← 쉼표와 공백까지)", text: $f.word)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.title3)
                                 .focused($focusedFiller, equals: f.id)
@@ -289,25 +294,38 @@ struct GlossaryPairView: View {
     // ── 용어 카드 1개 (영어 ↔ 한국어 쌍만) ──
     @ViewBuilder
     private func card(_ d: Binding<Draft>) -> some View {
-        HStack(spacing: 8) {
-            TextField("영어 (예: patient)", text: d.source)
-                .textFieldStyle(.roundedBorder)
-                .font(.title3)
-                .focused($focusedField, equals: d.wrappedValue.id)
-            Image(systemName: "arrow.left.and.right")
-                .font(.title3)
-                .foregroundStyle(.secondary)
-                .help("양방향: 영어가 나오면 한국어로, 한국어가 나오면 영어로 통일")
-            TextField("한국어 (예: 피험자)", text: d.canonical)
-                .textFieldStyle(.roundedBorder)
-                .font(.title3)
-            Button(role: .destructive) {
-                drafts.removeAll { $0.id == d.wrappedValue.id }
-            } label: {
-                Image(systemName: "trash").font(.title3)
+        VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                TextField("영어 (예: patient)", text: d.source)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.title3)
+                    .focused($focusedField, equals: d.wrappedValue.id)
+                Image(systemName: "arrow.left.and.right")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .help("양방향: 영어가 나오면 한국어로, 한국어가 나오면 영어로 통일")
+                TextField("한국어 (예: 피험자)", text: d.canonical)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.title3)
+                Button(role: .destructive) {
+                    drafts.removeAll { $0.id == d.wrappedValue.id }
+                } label: {
+                    Image(systemName: "trash").font(.title3)
+                }
+                .buttonStyle(.borderless)
+                .frame(width: 28)
             }
-            .buttonStyle(.borderless)
-            .frame(width: 28)
+            // v2.4.0: 유사어(오인식 표기) — 음성인식이 고유명사를 잘못 들어도 잡아내기 위함.
+            HStack(spacing: 8) {
+                Image(systemName: "waveform.badge.magnifyingglass")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .help("음성인식이 자주 틀리게 듣는 표기를 콤마로 등록하면, 그 표기가 들려도 이 용어로 인식합니다. 한국어 오인식(전군2호)과 영어 연사의 음차 오인식(Cheongunino 등)을 모두 등록할 수 있습니다.")
+                TextField("유사어 (콤마 구분, 한국어·영어 모두 가능. 예: 전군2호, 천궁 이호, Cheongunino)", text: d.aliasText)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.callout)
+                Spacer().frame(width: 28)
+            }
         }
         .padding(10)
         .background(Color.gray.opacity(0.08))
@@ -318,12 +336,22 @@ struct GlossaryPairView: View {
     private func load() {
         drafts = settings.loadGlossaryPairs().map {
             Draft(source: $0.source, canonical: $0.canonical,
-                  learnedText: $0.learnedTargets.joined(separator: ", "))
+                  learnedText: $0.learnedTargets.joined(separator: ", "),
+                  aliasText: $0.sourceAliases.joined(separator: ", "))   // v2.4.0
         }
-        // 블랙리스트: 저장된 콤마 구분 문자열 → 박스 목록으로
-        fillers = settings.blacklistWords
-            .split(whereSeparator: { $0 == "," || $0 == "\n" })
-            .map { $0.trimmingCharacters(in: .whitespaces) }
+        // v2.3.0: 블랙리스트 — 줄바꿈(\n) 구분으로 로드, 공백 보존("어, " 패턴 유지).
+        //         단, 줄바꿈이 전혀 없고 콤마만 있는 구버전 저장본은 콤마로 분리(호환).
+        let raw = settings.blacklistWords
+        let parts: [String]
+        if raw.contains("\n") {
+            parts = raw.components(separatedBy: "\n")
+        } else if raw.contains(",") {
+            // 구버전: 콤마 구분 → 분리 후 공백 정리(구버전은 어차피 공백 의미 없었음)
+            parts = raw.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        } else {
+            parts = [raw]
+        }
+        fillers = parts
             .filter { !$0.isEmpty }
             .map { FillerItem(word: $0) }
         // 불러온 직후 = 저장된 상태 → 스냅샷 기준 설정(이때 저장 버튼 회색)
@@ -338,14 +366,18 @@ struct GlossaryPairView: View {
             guard !s.isEmpty, !c.isEmpty else { return nil }   // 둘 다 있어야 의미 있음
             let learned = d.learnedText.split(separator: ",")
                 .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-            return GlossaryPair(source: s, canonical: c, learnedTargets: learned)
+            // v2.4.0: 유사어(콤마 구분) → sourceAliases
+            let aliases = d.aliasText.split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            return GlossaryPair(source: s, canonical: c, learnedTargets: learned, sourceAliases: aliases)
         }
         settings.saveGlossaryPairs(items)
-        // 블랙리스트: 박스들을 콤마로 합쳐 저장
+        // v2.3.0: 블랙리스트 — 필러를 줄바꿈(\n)으로 구분 저장. 공백을 자르지 않아
+        //         "어, "(쉼표+공백)처럼 패턴 전체를 그대로 보존. 빈 줄만 제거.
         settings.blacklistWords = fillers
-            .map { $0.word.trimmingCharacters(in: .whitespaces) }
+            .map { $0.word }
             .filter { !$0.isEmpty }
-            .joined(separator: ", ")
+            .joined(separator: "\n")
         onApply(items)
         // 저장 완료 → 스냅샷 갱신(버튼 회색) + "저장됨" 잠깐 표시
         savedSnapshot = currentSnapshot

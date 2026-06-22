@@ -2,11 +2,25 @@
 //  ContentView.swift
 //  BoothmateG
 //
-//  Version: 2.57.5
+//  Version: 2.62.0
 //  Changelog:
+//    2.62.0 - [한영 음역 교정] 새 방식 용어집을 코드 후처리로 연결(GlossaryPairEngine).
+//             확정 자막(SegmentRow.finishedTarget)에서 원문 대조로 AI가 놓친 음역(예: Cheongung-2)을
+//             표준표기(SKY Pierce II)로 교정. '이 방식 사용' ON일 때만. 진행 중 자막은 다음 단계.
+//    2.61.0 - 메인 콘솔 우측에 "반영 로그" 패널 추가(폭 조절 가능, 위→아래 누적).
+//             문장 확정 시 용어집(파랑)·생략어(주황)·행사(초록)·연사(보라) 반영을 색깔 박스로 표시.
+//             용어집·행사·연사는 번역문에서 추정, 생략어는 원문 패턴 기준. 최근 100개. ReflectionLog.swift 신규.
+//    2.60.0 - 다국어 오버레이를 언어별 독립 창으로 완전 전환(MultiSeparateOverlayController).
+//             청중 언어 수만큼 단일 오버레이 창이 떠 각자 배치·위치 저장. 메뉴·호버 동작 단일과 동일.
+//             다국어 시작 시 자동 표시 제거(버튼으로 켜기). 기존 MultiOverlayController 미사용.
+//    2.59.0 - 상단 단일/다국어 박스 크기 동적화 + 시작 맥동 붉은색 강화.
+//    2.58.0 - 블랙리스트 후처리 제거: 등록된 필러 패턴("어, " "음, " 등 쉼표·공백 포함)을
+//             자막에서 글자 그대로 삭제(applyBlacklist). polish·polishForArchive·SegmentRow에
+//             적용 → 콘솔·청중·오버레이·전사문 일관. "마음"·"먹음"의 "음"은 패턴이 달라 안전.
+//             (AI systemInstruction 지시와 별개의 확실한 2차 제거. 필러는 줄바꿈 구분 저장)
+//    2.57.6 - 단어 수정 후 자동 스크롤 멈춤 회복(편집 종료 시 스크롤 트리거).
 //    2.57.5 - [치명 버그 수정] 진행 중 자막 편집을 저장 없이 닫으면 editingHold가 true로 남아
-//             자동 확정이 영구 보류되며 콘솔 번역이 멈추던 문제 수정. 편집 종료(isEditing=false)
-//             시 editingHold·frozen 스냅샷을 안전 해제(단일/다국어 모두). 오버레이는 영향 없었음.
+//             자동 확정이 영구 보류되며 콘솔 번역이 멈추던 문제 수정.
 //    2.57.4 - 정지 시 드문 다운 방지(isStopping)·면적 제거, 환율만 유지.
 //    2.57.0 - 단위·환율 자동 변환(단일 언어 모드): polish() 헬퍼로 용어집+단위+환율 통합.
 //             콘솔 확정/진행 자막, 청중 송출, 전사문에 적용. 시작 시 환율 API 갱신.
@@ -84,6 +98,8 @@ struct ContentView: View {
     @State private var client = DualTranslateClient()
     @State private var multiClient = MultiTranslateClient()
     @State private var glossary = GlossaryEngine()
+    // v2.62.0: 새 방식 용어집(번역쌍·유사어) 코드 후처리 엔진. AI가 놓친 음역을 표준표기로 교정.
+    @State private var pairEngine = GlossaryPairEngine()
     @State private var audioPlayer = TranslatedAudioPlayer()
     // v2.57.0: 단위·환율 변환(단일 언어 모드). 환율은 앱 시작 시 API로 갱신.
     @StateObject private var currencyConverter = CurrencyConverter()
@@ -95,7 +111,12 @@ struct ContentView: View {
     @State private var showHostLogin = false
     
     @State private var overlayController = OverlayWindowController()
-    @State private var multiOverlay = MultiOverlayController()
+    @State private var multiOverlay = MultiSeparateOverlayController()   // v2.60.0: 언어별 독립 창
+
+    // v2.61.0: 반영 로그(콘솔 우측 패널) — 용어집·생략어·행사·연사 반영 내역
+    @StateObject private var reflectionLog = ReflectionLogStore()
+    @AppStorage("reflog_show")  private var reflogShow: Bool = true     // 패널 표시 여부
+    @AppStorage("reflog_width") private var reflogWidth: Double = 260   // 패널 폭(드래그 조절)
     
     // v2.36.0 추가: 음성 입력 자동 중지
     @State private var audioTimeoutTimer: Timer?
@@ -142,7 +163,30 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 14) {
             headerArea
             Divider()
-            subtitleScroll
+            // v2.61.0: 자막(왼쪽) + 반영 로그 패널(오른쪽, 폭 조절 가능)
+            HStack(spacing: 0) {
+                subtitleScroll
+                    .frame(maxWidth: .infinity)
+                if reflogShow {
+                    reflogDragHandle
+                    reflectionPanel
+                        .frame(width: reflogWidth)
+                } else {
+                    // 패널 숨김 상태: 얇은 세로 버튼으로 다시 열기
+                    Button { reflogShow = true } label: {
+                        VStack(spacing: 6) {
+                            Image(systemName: "checklist").font(.caption2)
+                            Text("로그").font(.system(size: 9))
+                        }
+                        .foregroundStyle(.secondary)
+                        .frame(width: 22)
+                        .frame(maxHeight: .infinity)
+                        .background(Color.gray.opacity(0.12))
+                    }
+                    .buttonStyle(.plain)
+                    .help("반영 로그 패널 열기")
+                }
+            }
             Divider()
             inputSourceBar
         }
@@ -218,14 +262,16 @@ struct ContentView: View {
 
             Divider().frame(height: 80)
             singleColumn
-                .frame(width: 380, alignment: .topLeading)
+                .frame(width: isRunning ? 520 : 300, alignment: .topLeading)
                 .padding(10)
-                .background(ActivePulseBox(active: isRunning, color: .green))
+                .background(ActivePulseBox(active: isRunning))
+                .animation(.easeInOut(duration: 0.35), value: isRunning)
             Divider().frame(height: 80)
             multiColumn
-                .frame(width: 380, alignment: .topLeading)
+                .frame(width: isMultiRunning ? 520 : 300, alignment: .topLeading)
                 .padding(10)
-                .background(ActivePulseBox(active: isMultiRunning, color: .blue))
+                .background(ActivePulseBox(active: isMultiRunning))
+                .animation(.easeInOut(duration: 0.35), value: isMultiRunning)
             Spacer()
         }
     }
@@ -368,7 +414,7 @@ struct ContentView: View {
                 // v2.37.0: 순서 변경 — 시작 · 오버레이 · 음성 · 자막리셋 · 카운터
                 overlayToggleButton(isOn: multiOverlay.isVisible, color: .blue, help: "다국어 오버레이") {
                     if multiStore.langs.isEmpty { multiStore.setLanguages(audienceLangs) }
-                    multiOverlay.toggle(store: multiStore)
+                    multiOverlay.toggle(store: multiStore, glossary: glossary, mainWindow: NSApp.keyWindow)
                 }
 
                 multiAudioMenu
@@ -472,6 +518,106 @@ struct ContentView: View {
         if isMultiRunning { multiSourceScroll } else { pairScroll }
     }
 
+    // v2.61.0: 패널 폭 조절용 드래그 구분선
+    private var reflogDragHandle: some View {
+        Rectangle()
+            .fill(Color.gray.opacity(0.001))
+            .frame(width: 8)
+            .overlay(Rectangle().fill(Color.gray.opacity(0.25)).frame(width: 1))
+            .onHover { inside in
+                if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+            }
+            .gesture(
+                DragGesture()
+                    .onChanged { value in
+                        // 왼쪽으로 끌면 패널이 넓어지므로 부호 반전
+                        let newW = reflogWidth - Double(value.translation.width)
+                        reflogWidth = min(560, max(180, newW))
+                    }
+            )
+    }
+
+    // v2.61.0: 반영 로그 패널 — 용어집·생략어·행사·연사 반영 내역을 색깔별 박스로 나열
+    private var reflectionPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Image(systemName: "checklist").font(.caption)
+                Text("반영 로그").font(.caption.bold())
+                Spacer()
+                if !reflectionLog.entries.isEmpty {
+                    Button { reflectionLog.clear() } label: {
+                        Image(systemName: "trash").font(.caption2)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("로그 지우기")
+                }
+                Button { reflogShow = false } label: {
+                    Image(systemName: "xmark").font(.caption2)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("패널 숨기기")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        ForEach(reflectionLog.entries) { entry in
+                            reflectionRow(entry).id(entry.id)
+                        }
+                    }
+                    .padding(10)
+                }
+                .onChange(of: reflectionLog.entries.count) { _, _ in
+                    if let last = reflectionLog.entries.last {
+                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                    }
+                }
+            }
+
+            if reflectionLog.entries.isEmpty {
+                Spacer()
+                Text("반영된 용어·생략어·행사·연사\n정보가 여기 표시됩니다")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .padding(.bottom, 20)
+            }
+        }
+        .background(consoleBackground.opacity(0.4))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    // 로그 한 줄: 종류 색 태그 + 내용
+    @ViewBuilder
+    private func reflectionRow(_ entry: ReflectionEntry) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text(entry.kind.label)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundColor(.white)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(entry.kind.color))
+            Text(entry.text)
+                .font(.system(size: 12))
+                .foregroundColor(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(entry.kind.color.opacity(0.10))
+        )
+    }
+
     private var multiSourceScroll: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -491,6 +637,10 @@ struct ContentView: View {
             }
             .onChange(of: multiStore.segments.count) { _, _ in
                 if !isEditing { withAnimation { proxy.scrollTo("msrc", anchor: .bottom) } }
+            }
+            // v2.57.6: 편집 종료 시 자동 스크롤 회복(단일과 동일).
+            .onChange(of: isEditing) { _, editing in
+                if !editing { withAnimation { proxy.scrollTo("msrc", anchor: .bottom) } }
             }
         }
         .frame(minHeight: 260)
@@ -615,6 +765,11 @@ struct ContentView: View {
             .onChange(of: subtitles.currentTarget) { _, _ in
                 if !isEditing { proxy.scrollTo("current", anchor: .bottom) }
             }
+            // v2.57.6: 단어 수정을 마쳐 편집이 끝나는 순간(isEditing=false) 자동 스크롤을 즉시 회복.
+            //          여러 SegmentRow가 isEditing을 공유해 생기던 "수정 후 스크롤 멈춤" 증상 대응.
+            .onChange(of: isEditing) { _, editing in
+                if !editing { withAnimation { proxy.scrollTo("current", anchor: .bottom) } }
+            }
         }
         .frame(minHeight: 260)
     }
@@ -624,13 +779,15 @@ struct ContentView: View {
         SegmentRow(
             segment: segment,
             glossary: glossary,
+            pairEngine: pairEngine,
             fontSize: CGFloat(targetFont),
             srcFontSize: CGFloat(sourceFont),
             isEditing: $isEditing,
             onCommitSource: { subtitles.updateSource(id: segment.id, newText: $0) },
             onCommitTarget: { subtitles.updateTarget(id: segment.id, newText: $0) },
             convert: settings.convertUnitsCurrency,
-            currencyConverter: isStopping ? nil : currencyConverter
+            currencyConverter: isStopping ? nil : currencyConverter,
+            blacklist: settings.blacklistWords
         )
         .id(segment.id)
     }
@@ -867,18 +1024,95 @@ struct ContentView: View {
     // v2.57.3: 면적(UnitConverter) 제거 — 한글 큰 숫자 번역(2백만 제곱미터 등) 미지원 이슈로 보류.
     //          환율(CurrencyConverter)만 유지. UnitConverter는 호출 안 함(파일은 보존).
     //          (CurrencyConverter는 @MainActor → 메인에서 호출되는 경로에서만 사용)
+    // v2.58.0: 블랙리스트 후처리 제거. 등록된 패턴(예: "어, " "음, ")을 자막에서 글자 그대로 삭제.
+    //          쉼표·공백까지 패턴에 포함되므로 "마음"·"먹음" 속 "음"은 매칭 안 됨(안전).
+    //          줄바꿈(\n) 구분으로 저장된 필러 목록을 순회. AI 지시(systemInstruction)와 별개의 2차 안전장치.
+    private func applyBlacklist(_ text: String) -> String {
+        let raw = settings.blacklistWords
+        guard !raw.isEmpty else { return text }
+        let fillers = raw.contains("\n")
+            ? raw.components(separatedBy: "\n")
+            : raw.components(separatedBy: ",")   // 구버전 호환
+        var out = text
+        for f in fillers where !f.isEmpty {
+            out = out.replacingOccurrences(of: f, with: "")
+        }
+        return out
+    }
+
     private func polish(_ text: String) -> String {
-        let normalized = glossary.normalize(text)
+        let normalized = applyBlacklist(glossary.normalize(text))
         guard settings.convertUnitsCurrency else { return normalized }
         // v2.57.4: 정지 정리 중에는 @MainActor 환율 변환을 건너뜀(겹침 다운 방지).
         if isStopping { return normalized }
         return currencyConverter.applyConversion(to: normalized)
     }
 
+    // v2.61.0: 반영 로그 수집. 문장 확정 시 호출.
+    //  - 용어집(파랑): 등록된 canonical/유사어가 번역문(target)에 나타나면 추정 표시
+    //  - 생략어(주황): 등록된 필러 패턴이 원문(source)에 있었으면 제거된 것으로 표시
+    //  - 행사(초록): 행사명·장소가 번역문에 나타나면 추정 표시
+    //  - 연사(보라): 연사 이름·직책이 번역문에 나타나면 추정 표시
+    private func logReflections(source: String, target: String) {
+        guard reflogShow else { return }   // 패널 꺼져 있으면 수집 안 함
+        var found: [(ReflectionKind, String)] = []
+
+        // ── 용어집(새 방식) ──
+        for pair in settings.loadGlossaryPairs() {
+            let canon = pair.canonical.trimmingCharacters(in: .whitespaces)
+            let src = pair.source.trimmingCharacters(in: .whitespaces)
+            guard !canon.isEmpty || !src.isEmpty else { continue }
+            // 번역문에 canonical 또는 source가 나타나면 반영된 것으로 추정
+            if !canon.isEmpty, target.localizedCaseInsensitiveContains(canon) {
+                let arrow = src.isEmpty ? canon : "\(src) → \(canon)"
+                found.append((.glossary, arrow))
+            } else if !src.isEmpty, target.localizedCaseInsensitiveContains(src) {
+                found.append((.glossary, src))
+            }
+        }
+
+        // ── 생략어(필러) ──
+        let raw = settings.blacklistWords
+        if !raw.isEmpty {
+            let fillers = raw.contains("\n")
+                ? raw.components(separatedBy: "\n")
+                : raw.components(separatedBy: ",")
+            for f in fillers where !f.isEmpty {
+                if source.contains(f) {
+                    let shown = f.trimmingCharacters(in: .whitespaces)
+                    found.append((.omission, "\(shown) 생략"))
+                }
+            }
+        }
+
+        // ── 행사 정보 ──
+        let ev = eventInfo
+        for name in [ev.eventName.ko, ev.eventName.en, ev.venue.ko, ev.venue.en] {
+            let n = name.trimmingCharacters(in: .whitespaces)
+            guard n.count >= 2 else { continue }
+            if target.localizedCaseInsensitiveContains(n) {
+                found.append((.event, n))
+            }
+        }
+
+        // ── 연사 정보 ──
+        for sp in ev.speakers {
+            for name in [sp.name.ko, sp.name.en, sp.position.ko, sp.position.en] {
+                let n = name.trimmingCharacters(in: .whitespaces)
+                guard n.count >= 2 else { continue }
+                if target.localizedCaseInsensitiveContains(n) {
+                    found.append((.speaker, n))
+                }
+            }
+        }
+
+        if !found.isEmpty { reflectionLog.addMany(found) }
+    }
+
     // v2.57.3: 전사문 저장 전용. 백그라운드 저장과 @MainActor 충돌을 피하려 환율 제외.
-    //          면적(UnitConverter)도 보류로 제거 → 전사문은 용어집 정규화만 적용.
+    //          면적(UnitConverter)도 보류로 제거 → 전사문은 용어집 정규화 + 블랙리스트만 적용.
     private func polishForArchive(_ text: String) -> String {
-        return glossary.normalize(text)
+        return applyBlacklist(glossary.normalize(text))
     }
 
     private func relaySingle() {
@@ -970,6 +1204,9 @@ struct ContentView: View {
             if self.isFishLang(self.settings.targetLang) {
                 self.sendTextToFish(lang: self.settings.targetLang, text: target)
             }
+            // v2.61.0: 반영 로그 — 방금 확정된 원문+번역 검사
+            let lastSrc = self.subtitles.segments.last?.sourceText ?? ""
+            self.logReflections(source: lastSrc, target: target)
         }
         client.onInputTranscript = { t in DispatchQueue.main.async { self.subtitles.appendSource(t) } }
         client.onOutputTranscript = { t in DispatchQueue.main.async { self.subtitles.appendTarget(t); self.relaySingle() } }
@@ -1001,6 +1238,8 @@ struct ContentView: View {
                                                guide: settings.interpretGuide,
                                                blacklist: settings.blacklistWords)
             : ""
+        // v2.62.0: 코드 후처리 엔진에도 같은 용어집 주입(토글 ON일 때만). AI가 놓친 음역을 교정.
+        pairEngine.update(pairs: settings.useGlossaryPairMode ? settings.loadGlossaryPairs() : [])
         client.connect(apiKey: settings.geminiApiKey, langA: settings.targetLang, langB: settings.sourceLang, glossaryInstruction: glossaryInstruction, eventInfo: eventInfo)
 
         do {
@@ -1115,7 +1354,8 @@ struct ContentView: View {
             audioSilenceTime = 0          // v2.36.0
             setupAudioTimeout()           // v2.36.0
             if !settings.multiAudioLang.isEmpty { audioPlayer.start() }
-            multiOverlay.show(store: multiStore)
+            // v2.60.0: 분리형 오버레이는 언어 수만큼 창이 뜨므로 시작 시 자동 표시하지 않음.
+            //          상단 '다국어 오버레이' 버튼으로 켠다(단일 모드와 동일한 흐름).
             beginBroadcastIfNeeded()
         } catch {
             statusMessage = "❌ 마이크 시작 실패: \(error.localizedDescription)"
@@ -1304,6 +1544,8 @@ struct ContentView: View {
 struct SegmentRow: View {
     let segment: SubtitleSegment
     let glossary: GlossaryEngine
+    // v2.62.0: 새 방식 용어집 코드 후처리 엔진(옵션). 있으면 원문 대조로 음역 교정.
+    var pairEngine: GlossaryPairEngine? = nil
     var fontSize: CGFloat = 18
     var srcFontSize: CGFloat = 14
     @Binding var isEditing: Bool
@@ -1312,11 +1554,26 @@ struct SegmentRow: View {
     // v2.57.0: 단위·환율 변환(단일 언어 모드 전용, 기본 꺼짐). convert=true일 때만 적용.
     var convert: Bool = false
     var currencyConverter: CurrencyConverter? = nil
+    // v2.58.0: 블랙리스트 패턴(줄바꿈 구분). 확정 자막에서도 필러 제거.
+    var blacklist: String = ""
 
-    // 용어집 정규화 + (옵션) 환율 변환
+    // 용어집 정규화 + 블랙리스트 제거 + (옵션) 환율 변환
     // v2.57.4: 면적(UnitConverter) 제거 — 환율만 적용.
     private func finishedTarget(_ text: String) -> String {
-        let normalized = glossary.normalize(text)
+        var normalized = glossary.normalize(text)
+        // v2.62.0: 새 방식 용어집 코드 후처리 — 원문(sourceText) 대조로 AI가 놓친 음역을 표준표기로 교정.
+        if let pe = pairEngine {
+            normalized = pe.apply(source: segment.sourceText, target: normalized)
+        }
+        // v2.58.0: 블랙리스트 필러 제거(쉼표·공백 포함 패턴 그대로)
+        if !blacklist.isEmpty {
+            let fillers = blacklist.contains("\n")
+                ? blacklist.components(separatedBy: "\n")
+                : blacklist.components(separatedBy: ",")
+            for f in fillers where !f.isEmpty {
+                normalized = normalized.replacingOccurrences(of: f, with: "")
+            }
+        }
         guard convert else { return normalized }
         if let cc = currencyConverter {
             return cc.applyConversion(to: normalized)
@@ -1354,14 +1611,21 @@ struct SegmentRow: View {
 // idle일 때는 투명(박스 없음).
 struct ActivePulseBox: View {
     var active: Bool
-    var color: Color
+    var color: Color = .red   // v2.59.0: 색 구별 없이 항상 붉은색 사용(인자는 호환용으로 유지)
     @State private var pulse = false
 
     var body: some View {
+        // v2.59.0: 시작(녹화) 중임을 확실히 알리는 붉은 맥동.
+        //  진해졌다(0.5) 밝아졌다(0.15) 반복 + 붉은 테두리로 또렷하게.
         RoundedRectangle(cornerRadius: 12)
-            .fill(color.opacity(active ? (pulse ? 0.22 : 0.09) : 0.0))
+            .fill(Color.red.opacity(active ? (pulse ? 0.50 : 0.15) : 0.0))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.red.opacity(active ? (pulse ? 0.9 : 0.3) : 0.0),
+                            lineWidth: active ? 2 : 0)
+            )
             .animation(
-                active ? .easeInOut(duration: 1.6).repeatForever(autoreverses: true) : .easeOut(duration: 0.4),
+                active ? .easeInOut(duration: 0.85).repeatForever(autoreverses: true) : .easeOut(duration: 0.4),
                 value: pulse
             )
             .onAppear { pulse = active }

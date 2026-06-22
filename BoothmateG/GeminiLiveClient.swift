@@ -2,8 +2,15 @@
 //  GeminiLiveClient.swift
 //  BoothmateG
 //
-//  Version: 1.7.0
+//  Version: 1.8.1
 //  Changelog:
+//    1.8.1 - echoTargetLanguage false→true 테스트. 입력이 목표 언어일 때 침묵 대신 처리 →
+//            영한/한영 자동 감지로 인한 언어 혼입 완화 시도. (효과 없으면 false로 되돌림)
+//    1.8.0 - 기본 번역 규칙을 항상 주입(글로서리·행사정보 없어도). 실시간 스트리밍 번역에서
+//            영어 구절이 번역 안 되고 남는 영어 혼입 완화. 목표 언어 명시 + 원문 언어 잔류 금지 지시.
+//            languageDisplayName 헬퍼 추가.
+//    1.7.0 - 행사 정보 systemInstruction 동적 주입: connect(eventInfo:)로 받아
+//            setup에서 용어집과 함께 주입. 행사정보 변경 시 재연결.
 //    1.0.0 - 최초 작성. Gemini 3.5 Live Translate WebSocket 클라이언트
 //    1.1.0 - echoTargetLanguage:false + 입력 감지 언어(onInputLanguage)
 //    1.2.0 - 번역 음성 지원: 언어코드 그대로 전송(BCP-47),
@@ -172,7 +179,7 @@ final class GeminiLiveClient: NSObject {
                 "responseModalities": ["AUDIO"],
                 "translationConfig": [
                     "targetLanguageCode": targetLang,
-                    "echoTargetLanguage": false
+                    "echoTargetLanguage": true
                 ]
             ],
             "inputAudioTranscription": [:],
@@ -181,11 +188,20 @@ final class GeminiLiveClient: NSObject {
             "contextWindowCompression": ["slidingWindow": [:]]
         ]
 
-        // 용어집 주입(v1.6.0): 등록된 용어가 있으면 systemInstruction으로 번역 단계에서 강제.
-        //  비어있으면 주입하지 않음(기본 번역).
+        // v1.8.0: 기본 번역 규칙을 항상 주입(글로서리·행사정보 유무와 무관).
+        //  실시간 스트리밍 번역에서 일부 영어 구절이 번역되지 않고 그대로 남는 현상(영어 혼입) 완화.
+        //  목표 언어를 명시하고, 원문 언어 단어를 하나도 남기지 말라고 강하게 지시.
         var systemText = ""
+        let targetName = Self.languageDisplayName(connTargetLang)
+        systemText += """
+        You are a professional simultaneous interpreter. Translate everything you hear into \(targetName).
+        CRITICAL OUTPUT RULE: Your output MUST be written entirely in \(targetName). Never leave any word or phrase in the original/source language untranslated. Translate the ENTIRE utterance — including trailing verb phrases and inserted clauses — fully into \(targetName). If a fragment arrives, still translate that fragment into \(targetName); do not echo it in the source language.
+        Keep the interpretation natural and concise.
+        """
+
+        // 용어집 주입(v1.6.0): 등록된 용어가 있으면 systemInstruction으로 번역 단계에서 강제.
         if !connGlossaryInstruction.isEmpty {
-            systemText += connGlossaryInstruction
+            systemText += "\n\n" + connGlossaryInstruction
             print("[BMG] 용어집 systemInstruction 주입(\(connGlossaryInstruction.count)자)")
         }
         
@@ -317,6 +333,25 @@ final class GeminiLiveClient: NSObject {
         }
     }
     
+    // ── v1.8.0: 언어 코드를 영어 표시명으로 (systemInstruction의 목표 언어 명시용) ──
+    static func languageDisplayName(_ code: String) -> String {
+        let map: [String: String] = [
+            "ko": "Korean", "en": "English", "ja": "Japanese",
+            "zh-Hans": "Simplified Chinese", "zh-Hant": "Traditional Chinese",
+            "es": "Spanish", "fr": "French", "de": "German", "it": "Italian",
+            "pt-BR": "Portuguese", "pt-PT": "Portuguese", "ru": "Russian",
+            "vi": "Vietnamese", "th": "Thai", "id": "Indonesian", "ar": "Arabic",
+            "hi": "Hindi", "tr": "Turkish", "pl": "Polish", "nl": "Dutch"
+        ]
+        if let name = map[code] { return name }
+        // 매핑에 없으면 코드 앞부분으로 Locale 시도, 그래도 없으면 코드 그대로
+        let base = String(code.prefix(while: { $0 != "-" }))
+        if let name = Locale(identifier: "en").localizedString(forLanguageCode: base) {
+            return name
+        }
+        return code
+    }
+
     // ── v1.7.0 추가: 행사 정보 systemInstruction 생성 ──
     private func generateEventInstruction(_ eventInfo: EventInfo) -> String {
         guard !eventInfo.isEmpty else { return "" }

@@ -2,8 +2,11 @@
 //  GlossaryInstructionBuilder.swift
 //  BoothmateG
 //
-//  Version: 2.2.0
+//  Version: 2.3.0
 //  Changelog:
+//    2.3.0 - 용어집 섹션에 유사어(sourceAliases) 안내 추가. 각 용어 줄에 "may be misheard as ..."로
+//            오인식 표기를 함께 제시 → AI가 STT 오인식(예: 천궁2호→전군2호)을 듣고도 올바른 용어로
+//            번역. 후처리(GlossaryPairEngine)와 함께 2중 보강.
 //    2.2.0 - 통역 지침을 최우선 표준 지침으로(맨 앞 배치, PRIMARY). 블랙리스트는 등록 표현만
 //            정확히 생략(유사어 확대 금지). 민감 표현 처리는 통역 지침이 담당.
 //    2.1.0 - 필러 섹션에 '단어 일부는 보호'(마음의 음 등) 지시 추가.
@@ -38,21 +41,33 @@ enum GlossaryInstructionBuilder {
         }
 
         // 2) 용어집 섹션
-        let valid = pairs.compactMap { p -> (en: String, ko: String)? in
+        let valid = pairs.compactMap { p -> (en: String, ko: String, aliases: [String])? in
             let a = p.source.trimmingCharacters(in: .whitespaces)
             let b = p.canonical.trimmingCharacters(in: .whitespaces)
             guard !a.isEmpty, !b.isEmpty else { return nil }
             let aIsKo = a.unicodeScalars.contains { $0.value >= 0xAC00 && $0.value <= 0xD7A3 }
             let en = aIsKo ? b : a
             let ko = aIsKo ? a : b
-            return (en, ko)
+            let aliases = p.sourceAliases
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            return (en, ko, aliases)
         }
         if !valid.isEmpty {
-            let termLines = valid.map { "- \"\($0.en)\" ⇄ \"\($0.ko)\"" }.joined(separator: "\n")
+            let termLines = valid.map { entry -> String in
+                var line = "- \"\(entry.en)\" ⇄ \"\(entry.ko)\""
+                if !entry.aliases.isEmpty {
+                    // 별칭: 음성인식 오인식 대비. 이렇게 들려도 같은 용어로 처리하라는 안내.
+                    let aliasStr = entry.aliases.map { "\"\($0)\"" }.joined(separator: ", ")
+                    line += " (may be misheard as \(aliasStr) — treat these as the same term)"
+                }
+                return line
+            }.joined(separator: "\n")
             sections.append("""
             GLOSSARY — You MUST use these exact term translations in BOTH directions, in every context:
             \(termLines)
             - When the source contains a listed term, the translation MUST use its paired term exactly.
+            - If the source sounds like one of the "misheard as" variants, interpret it as the intended term and translate accordingly.
             - Apply even if the sentence is short, incomplete, or grammatically imperfect.
             """)
         }

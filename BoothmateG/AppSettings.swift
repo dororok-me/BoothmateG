@@ -2,8 +2,10 @@
 //  AppSettings.swift
 //  BoothmateG
 //
-//  Version: 1.10.0
+//  Version: 1.11.0
 //  Changelog:
+//    1.11.0 - GlossaryPair에 sourceAliases 추가: 원문어의 유사어/오인식 표기 등록.
+//             STT가 고유명사를 잘못 인식해도(예: 천궁2호→전군2호) 별칭이 잡히면 용어 발동.
 //    1.10.0 - 단위·환율 자동 변환 토글(convertUnitsCurrency) 추가. 단일 언어 모드 번역문에
 //             단위/환율 환산을 괄호로 덧붙임. (UnitConverter/CurrencyConverter 연동)
 //    1.9.0 - 통역 지침(interpretGuide, 자유 서술) + 단어 블랙리스트(blacklistWords) 저장 추가.
@@ -210,9 +212,12 @@ struct GlossaryItem: Identifiable, Codable, Hashable {
 //  - canonical: 타겟 표준표기 (예: "피험자") — 화면에 이 표기로 통일
 //  - learnedTargets: 앱이 학습한 "실제 번역어" 캐시 (예: ["환자","환자분"])
 //    원문에 source가 있을 때, 타겟에서 이 단어들을 찾아 canonical로 교체. 조사는 그대로 둠.
+//  - sourceAliases: v1.11.0 — source의 유사어/오인식 표기 (예: "천궁2호"의 ["전군2호","천궁 이호"]).
+//    STT가 고유명사를 잘못 인식해도 별칭이 잡히면 source가 발동한 것으로 처리 → 고유명사 누락 방지.
 struct GlossaryPair: Identifiable, Codable, Hashable {
     var id = UUID()
     var source: String
     var canonical: String
     var learnedTargets: [String] = []
+    var sourceAliases: [String] = []   // v1.11.0: source 유사어(오인식 대비)
 }

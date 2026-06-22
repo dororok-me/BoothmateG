@@ -2,8 +2,17 @@
 //  OverlayWindow.swift
 //  BoothmateG
 //
-//  Version: 1.25.0
+//  Version: 1.29.0
 //  Changelog:
+//    1.29.0 - 글자 테두리(그림자) 세부 조절 추가: 테두리색·굵기·그림자 흐림(설정 패널, 테두리 켜짐 시).
+//             모든 창(OBS·일반·단일·다국어)에 동일 적용. StrokeModifier 확장.
+//    1.28.0 - 다국어 분리 창 겹침 방지: 처음 뜰 때 cascadeIndex만큼 계단식 배치(저장 위치 있으면 그대로).
+//    1.27.0 - OverlayWindowController에 langKey 추가: 빈 문자열이면 단일 언어(기존 키 그대로),
+//             "en"/"ja" 등이면 위치·크기 저장 키에 접두사가 붙어 언어별 독립 저장.
+//             다국어 분리 오버레이(MultiSeparateOverlayController)가 언어별 인스턴스로 사용.
+//             (static 저장 키 → 인스턴스 계산 속성으로 변경. 단일 언어 동작은 100% 보존)
+//    1.26.0 - 컨트롤 버튼(설정·X)을 마우스 호버 시에만 표시(설정 열림 중엔 항상). 평소엔 자막만 깔끔히.
+//             상단 중앙 드래그 핸들(가로 바) 제거.
 //    1.25.0 - 상단 페이드 폭 확대: 완전 불투명 도달 지점 0.18→0.32, 중간 단계 촘촘히.
 //             살짝 보이며 끊기던 잔상 제거. 맨 끝단은 완전 투명.
 //    1.24.0 - 상단 페이드 마스크 최초 추가.
@@ -105,6 +114,18 @@ final class OverlayWindowController {
     private let uiState = OverlayUIState()
     var isVisible: Bool { panel?.isVisible ?? false }
 
+    // v1.27.0: 언어 식별자. 빈 문자열="" → 단일 언어(기존 키 그대로). "en"/"ja" 등 → 다국어 분리 창.
+    //  이 값에 따라 위치 저장 키에 접두사가 붙어, 언어별로 창 위치·크기를 독립 저장한다.
+    var langKey: String = ""
+
+    // v1.28.0: 다국어 분리 창이 처음 뜰 때 겹치지 않도록 순번만큼 어긋나게 배치(계단식).
+    //  저장된 위치가 있으면 무시되고 그 위치로 복원됨. 단일 언어(0)는 영향 없음.
+    var cascadeIndex: Int = 0
+
+    init(langKey: String = "") {
+        self.langKey = langKey
+    }
+
     func toggle(store: SubtitleStore, glossary: GlossaryEngine, mainWindow: NSWindow?, displayPolish: ((String) -> String)? = nil) {
         if isVisible { hide() } else { show(store: store, glossary: glossary, mainWindow: mainWindow, displayPolish: displayPolish) }
     }
@@ -119,7 +140,7 @@ final class OverlayWindowController {
 
             let view = OverlayContentView(store: store, glossary: glossary, uiState: uiState, onClose: { [weak self] in
                 self?.hide()
-            }, displayPolish: displayPolish)
+            }, displayPolish: displayPolish, langKey: langKey)
             let hosting = NSHostingController(rootView: view)
             // 콘텐츠의 고유 크기가 창 크기를 바꾸지 못하게 잠금
             // (설정 패널을 열어도 창이 패널 높이만큼 늘어나던 문제 방지)
@@ -165,9 +186,9 @@ final class OverlayWindowController {
             // 마지막 위치·크기 복원: ① 디스플레이 ID 기반(외부 출력 견고) → ② 절대좌표 폴백.
             restoredFrame = restoreFrameByDisplay()              // 같은 모니터 찾아 복원
             if !restoredFrame {
-                restoredFrame = panel?.setFrameUsingName(Self.frameAutosaveName) ?? false  // 폴백: 절대좌표
+                restoredFrame = panel?.setFrameUsingName(frameAutosaveName) ?? false  // 폴백: 절대좌표
             }
-            panel?.setFrameAutosaveName(Self.frameAutosaveName)  // 이후 이동/리사이즈 자동 저장(절대좌표)
+            panel?.setFrameAutosaveName(frameAutosaveName)  // 이후 이동/리사이즈 자동 저장(절대좌표)
 
             // 크래시 대비: 닫기를 못 거치고 앱이 다운돼도 마지막 모니터·위치가 남도록
             // 이동/리사이즈가 일어날 때마다 디스플레이 정보 저장.
@@ -182,8 +203,13 @@ final class OverlayWindowController {
         }
 
         // 창을 처음 만들 때만 위치 배치: 저장된 위치가 있으면 그대로, 없으면 메인 창 위.
+        // v1.28.0: 다국어 분리 창이 여러 개면 cascadeIndex만큼 계단식으로 어긋나게(겹침 방지).
         if didCreate, !restoredFrame, let mf = mainWindow?.frame {
-            panel?.setFrame(NSRect(x: mf.origin.x, y: mf.origin.y + mf.height + 8,
+            let step: CGFloat = 240   // 창 사이 가로/세로 어긋남 간격
+            let dx = CGFloat(cascadeIndex) * step
+            let dy = CGFloat(cascadeIndex) * 60
+            panel?.setFrame(NSRect(x: mf.origin.x + dx,
+                                   y: mf.origin.y + mf.height + 8 - dy,
                                    width: mf.width, height: 220), display: true)
         }
 
@@ -199,10 +225,12 @@ final class OverlayWindowController {
     }
 
     // 창 위치·크기 자동 저장 이름 (UserDefaults에 "NSWindow Frame {이름}"으로 저장됨)
-    private static let frameAutosaveName = "BoothmateGOverlayFrame"
+    // v1.27.0: langKey가 있으면 언어별로 분리("..._en" 등). 단일 언어(빈 키)는 기존 이름 그대로.
+    private var suffix: String { langKey.isEmpty ? "" : "_\(langKey)" }
+    private var frameAutosaveName: String { "BoothmateGOverlayFrame\(suffix)" }
     // 디스플레이 ID 기반 저장 키
-    private static let dispKey = "ov_overlayDisplayID"   // 마지막으로 있던 모니터 고유 ID
-    private static let relKey  = "ov_overlayRelFrame"    // 그 모니터 안에서의 상대 위치/크기 "x,y,w,h"
+    private var dispKey: String { "ov_overlayDisplayID\(suffix)" }   // 마지막으로 있던 모니터 고유 ID
+    private var relKey: String  { "ov_overlayRelFrame\(suffix)" }    // 그 모니터 안에서의 상대 위치/크기 "x,y,w,h"
 
     // 현재 창이 놓인 화면의 디스플레이 ID + 모니터 내 상대 프레임을 저장.
     //  창을 닫을 때 호출 → 재시작/다운 후에도 "그 모니터"에 그대로 복원.
@@ -214,16 +242,16 @@ final class OverlayWindowController {
         let rx = p.frame.origin.x - sf.origin.x
         let ry = p.frame.origin.y - sf.origin.y
         let rel = "\(rx),\(ry),\(p.frame.width),\(p.frame.height)"
-        UserDefaults.standard.set(Int(sid), forKey: Self.dispKey)
-        UserDefaults.standard.set(rel, forKey: Self.relKey)
+        UserDefaults.standard.set(Int(sid), forKey: dispKey)
+        UserDefaults.standard.set(rel, forKey: relKey)
     }
 
     // 저장된 디스플레이 ID와 같은 모니터를 찾아, 그 안의 상대 위치로 복원. 성공 시 true.
     private func restoreFrameByDisplay() -> Bool {
         let defaults = UserDefaults.standard
-        guard defaults.object(forKey: Self.dispKey) != nil,
-              let rel = defaults.string(forKey: Self.relKey) else { return false }
-        let savedID = UInt32(defaults.integer(forKey: Self.dispKey))
+        guard defaults.object(forKey: dispKey) != nil,
+              let rel = defaults.string(forKey: relKey) else { return false }
+        let savedID = UInt32(defaults.integer(forKey: dispKey))
         // 같은 ID의 모니터가 현재 연결돼 있는지
         guard let scr = NSScreen.screens.first(where: { displayID(of: $0) == savedID }) else {
             return false   // 그 모니터 없음 → 폴백
@@ -420,6 +448,9 @@ struct OverlayContentView: View {
     // v1.22.0: 표시용 후처리(단위·환율 변환 등). 기본값은 변환 없음(빈 클로저면 입력 그대로).
     //          ContentView가 polish를 넘기면 화면·청중과 동일하게 환산이 붙음. 편집 진입에는 미적용.
     var displayPolish: ((String) -> String)? = nil
+    // v1.28.0: 언어 식별자. 다국어 분리 창이면 "en"/"ja" 등 → 호버 시 우상단에 언어 라벨 표시.
+    //          단일 언어 창은 빈 문자열 → 라벨 미표시.
+    var langKey: String = ""
 
     // ── 설정 (AppStorage로 앱 종료 후에도 유지) ──
     @AppStorage("ov_bgMode")       private var bgMode: String = "obs"
@@ -429,6 +460,10 @@ struct OverlayContentView: View {
     @AppStorage("ov_fontColorHex") private var fontColorHex: String = "#FBBF24"
     @AppStorage("ov_fontBold")     private var fontBold: Bool = true
     @AppStorage("ov_textStroke")   private var textStroke: Bool = true
+    // v1.29.0: 글자 테두리(그림자) 세부 설정 — 어떤 창에서도 조절 가능
+    @AppStorage("ov_strokeColorHex") private var strokeColorHex: String = "#000000"  // 테두리 색
+    @AppStorage("ov_strokeWidth")    private var strokeWidth: Double = 1.0           // 굵기(번짐 크기)
+    @AppStorage("ov_strokeBlur")     private var strokeBlur: Double = 3.0            // 그림자 흐림(부드러운 번짐)
     @AppStorage("ov_showSource")   private var showSource: Bool = false
     @AppStorage("ov_srcFontSize")  private var srcFontSize: Double = 18
     @AppStorage("ov_srcColorHex")  private var srcColorHex: String = "#CBD5E1"
@@ -442,6 +477,7 @@ struct OverlayContentView: View {
     @State private var editText: String = ""
     @State private var isCurrentEditing: Bool = false   // v1.15.0: 진행 중 자막 편집 중 여부
     @State private var committedEditID: UUID? = nil      // v1.15.0: 더블클릭 순간 확정된 세그먼트 id
+    @State private var isHovering: Bool = false          // v1.26.0: 마우스 호버 시에만 컨트롤 버튼 표시
 
     private var isOBS: Bool { bgMode == "obs" }
 
@@ -497,7 +533,7 @@ struct OverlayContentView: View {
                                             }
                                         }
                                     )
-                                    .modifier(StrokeModifier(enabled: textStroke))
+                                    .modifier(StrokeModifier(enabled: textStroke, colorHex: strokeColorHex, width: strokeWidth, blur: strokeBlur))
                                     .lineSpacing(textLineSpacing)
                                     .fixedSize(horizontal: false, vertical: true)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -539,16 +575,6 @@ struct OverlayContentView: View {
                 }
             }
 
-            // ── 드래그 핸들 표시 (상단 중앙) ──
-            VStack {
-                Capsule()
-                    .fill(Color.white.opacity(0.25))
-                    .frame(width: 40, height: 4)
-                    .padding(.top, 6)
-                Spacer()
-            }
-            .allowsHitTesting(false)
-
             // ── 설정 열렸을 때: 패널 바깥 클릭 → 패널 닫고 전체 자막 화면으로 ──
             if uiState.settingsOpen {
                 Color.black.opacity(0.001)
@@ -557,8 +583,18 @@ struct OverlayContentView: View {
                     .onTapGesture { uiState.settingsOpen = false }
             }
 
-            // ── 컨트롤 버튼 (우상단) ──
+            // ── 컨트롤 버튼 (우상단) — v1.26.0: 마우스 호버 시에만 표시 ──
             HStack(spacing: 6) {
+                // v1.28.0: 다국어 분리 창이면 언어 라벨 표시(어느 언어 창인지 식별). 단일 창은 미표시.
+                if !langKey.isEmpty {
+                    Text(Self.langDisplay(langKey))
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(.white.opacity(0.9))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(Color.black.opacity(0.45)))
+                }
+
                 Button { uiState.settingsOpen.toggle() } label: {
                     Image(systemName: "gearshape.fill")
                         .font(.system(size: 13))
@@ -576,6 +612,10 @@ struct OverlayContentView: View {
                 }.buttonStyle(.plain)
             }
             .padding(10)
+            // v1.26.0: 호버 또는 설정 열림일 때만 보이게(평소엔 자막만 깔끔히)
+            .opacity((isHovering || uiState.settingsOpen) ? 1 : 0)
+            .animation(.easeInOut(duration: 0.18), value: isHovering)
+            .animation(.easeInOut(duration: 0.18), value: uiState.settingsOpen)
 
             // ── 설정 패널 (창 높이를 넘으면 내부 스크롤; 창 크기는 그대로 유지) ──
             if uiState.settingsOpen {
@@ -594,6 +634,10 @@ struct OverlayContentView: View {
             }
         }
         .opacity(winOpacity)
+        // v1.26.0: 마우스가 창 위에 있는 동안만 컨트롤 버튼 표시
+        .onHover { hovering in
+            isHovering = hovering
+        }
         // OBS 모드(투명)일 때 경계선 표시 — 창 크기 조절 편의
         .overlay(
             Group {
@@ -639,7 +683,7 @@ struct OverlayContentView: View {
                 Text(spacedAttr((displayPolish ?? glossary.normalize)(seg.targetText)))
                     .font(.system(size: fontSize, weight: fontBold ? .bold : .regular))
                     .foregroundColor(Color(hex: fontColorHex))
-                    .modifier(StrokeModifier(enabled: textStroke))
+                    .modifier(StrokeModifier(enabled: textStroke, colorHex: strokeColorHex, width: strokeWidth, blur: strokeBlur))
                     .lineSpacing(textLineSpacing)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -707,6 +751,18 @@ struct OverlayContentView: View {
             sRow("색상") { hexPicker(OverlayContentView.fontColors, selected: fontColorHex) { fontColorHex = $0 } }
             sRow("굵게") { Toggle("", isOn: $fontBold).toggleStyle(.switch).controlSize(.small) }
             sRow("테두리") { Toggle("", isOn: $textStroke).toggleStyle(.switch).controlSize(.small) }
+            // v1.29.0: 테두리(그림자) 세부 조절 — 켜져 있을 때만 표시
+            if textStroke {
+                sRow("테두리색") { hexPicker(OverlayContentView.fontColors, selected: strokeColorHex) { strokeColorHex = $0 } }
+                sRow("테두리 굵기") {
+                    Slider(value: $strokeWidth, in: 0.5...6, step: 0.5).frame(width: 120)
+                    Text(String(format: "%.1f", strokeWidth)).frame(width: 34).font(.caption)
+                }
+                sRow("그림자") {
+                    Slider(value: $strokeBlur, in: 0...12, step: 0.5).frame(width: 120)
+                    Text(String(format: "%.1f", strokeBlur)).frame(width: 34).font(.caption)
+                }
+            }
 
             Divider()
 
@@ -794,6 +850,18 @@ struct OverlayContentView: View {
     // 실시간 자막이 마지막 줄에서 창 밖으로 넘쳐 보이는 현상 방지.
     static let bottomFixedMargin: CGFloat = 28
 
+    // v1.28.0: 언어 코드 → 라벨 표시명 (다국어 분리 창의 우상단 라벨용)
+    static func langDisplay(_ code: String) -> String {
+        let map: [String: String] = [
+            "ko": "한국어", "en": "English", "ja": "日本語",
+            "zh-Hans": "简体中文", "zh-Hant": "繁體中文",
+            "es": "Español", "fr": "Français", "de": "Deutsch", "it": "Italiano",
+            "pt-BR": "Português", "pt-PT": "Português", "ru": "Русский",
+            "vi": "Tiếng Việt", "th": "ไทย", "id": "Indonesia", "ar": "العربية"
+        ]
+        return map[code] ?? code.uppercased()
+    }
+
     static let fontColors: [(String, String)] = [
         ("노란색", "#FBBF24"), ("흰색", "#FFFFFF"), ("검정", "#000000"),
         ("초록색", "#4ADE80"), ("하늘색", "#38BDF8"), ("빨간색", "#F87171"),
@@ -811,11 +879,23 @@ struct OverlayContentView: View {
 
 struct StrokeModifier: ViewModifier {
     let enabled: Bool
+    // v1.29.0: 색·굵기·흐림 조절. 기본값은 기존 동작(검정, 가는 그림자)과 유사.
+    var colorHex: String = "#000000"
+    var width: Double = 1.0     // 굵기: 사방으로 퍼지는 정도
+    var blur: Double = 3.0      // 흐림: 그림자 번짐 반경
+
     func body(content: Content) -> some View {
         if enabled {
+            let c = Color(hex: colorHex)
+            let w = CGFloat(width)
+            let b = CGFloat(blur)
+            // 사방 그림자로 두께감(굵기)을 만들고, blur로 번짐의 부드러움을 조절.
             content
-                .shadow(color: .black.opacity(0.8), radius: 1, x: 0, y: 1)
-                .shadow(color: .black.opacity(0.5), radius: 3, x: 0, y: 0)
+                .shadow(color: c.opacity(0.9), radius: b * 0.4, x:  w, y:  w)
+                .shadow(color: c.opacity(0.9), radius: b * 0.4, x: -w, y: -w)
+                .shadow(color: c.opacity(0.9), radius: b * 0.4, x:  w, y: -w)
+                .shadow(color: c.opacity(0.9), radius: b * 0.4, x: -w, y:  w)
+                .shadow(color: c.opacity(0.6), radius: b, x: 0, y: 0)
         } else {
             content
         }

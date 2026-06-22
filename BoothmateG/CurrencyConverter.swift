@@ -1,3 +1,16 @@
+//
+//  CurrencyConverter.swift
+//  BoothmateG
+//
+//  Version: 3.7.0
+//  Changelog:
+//    3.7.0 - '한글 숫자(일~십) + 단위' 변환 블록 2곳 제거(원화/달러).
+//            "수십억 달러", "이십억 달러"처럼 '십' 앞에 다른 글자가 오면 '십'만 잡아
+//            10억으로 오변환되던 문제 해결. 금액은 거의 항상 아라비아 숫자로 나오므로
+//            숫자 기반 블록만으로 충분. (막연수 '수십억'은 변환하지 않는 것이 정상)
+//    ~3.6.x - 외화↔원화 양방향, million/billion/trillion, 한국어 달러 표현 등. (환율 API: open.er-api.com)
+//
+
 import Foundation
 import Combine
 
@@ -252,38 +265,9 @@ class CurrencyConverter: ObservableObject {
         var output = text
         guard let usdRate = rates["USD"], usdRate > 0 else { return output }
 
-        // 한글 숫자 + 조/억/만원
-        let koreanUnits: [(String, Double)] = [
-            ("조원", 1_0000_0000_0000), ("조 원", 1_0000_0000_0000),
-            ("억원", 1_0000_0000), ("억 원", 1_0000_0000),
-            ("만원", 10000), ("만 원", 10000),
-        ]
-        let koreanDigits: [(String, Double)] = [
-            ("일", 1), ("이", 2), ("삼", 3), ("사", 4), ("오", 5),
-            ("육", 6), ("칠", 7), ("팔", 8), ("구", 9), ("십", 10),
-        ]
-
-        for (unit, multiplier) in koreanUnits {
-            for (kDigit, kValue) in koreanDigits {
-                let escaped = NSRegularExpression.escapedPattern(for: unit)
-                let pattern = "\(kDigit)\\s*\(escaped)"
-                guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { continue }
-
-                let nsText = output as NSString
-                let matches = regex.matches(in: output, range: NSRange(location: 0, length: nsText.length))
-
-                for match in matches.reversed() {
-                    let fullMatch = nsText.substring(with: match.range)
-                    let afterIndex = match.range.location + match.range.length
-                    if afterIndex < nsText.length && nsText.character(at: afterIndex) == Character("(").asciiValue! { continue }
-
-                    let krw = kValue * multiplier
-                    let usd = krw / usdRate
-                    let usdText = formatUSDsimple(usd)
-                    output = (output as NSString).replacingCharacters(in: match.range, with: "\(fullMatch)(\(usdText))")
-                }
-            }
-        }
+        // v3.7.0: '한글 숫자(일~십) + 단위' 블록 제거.
+        //  "수십억", "이십억"처럼 '십' 앞에 다른 글자가 오면 '십'만 잡아 오변환되는 문제.
+        //  (통역 자막의 금액은 거의 항상 아라비아 숫자로 나오므로 아래 숫자 블록으로 충분)
 
         // 숫자 + 조원/억원/만원/천원
         output = convertKRWUnit(in: output, pattern: #"₩?\s*(\d+(?:,\d+)*(?:\.\d+)?)\s*조\s*원"#, multiplier: 1_0000_0000_0000, usdRate: usdRate)
@@ -448,36 +432,10 @@ class CurrencyConverter: ObservableObject {
                         output = (output as NSString).replacingCharacters(in: match.range, with: "\(fullMatch)(\(krwText))")
                     }
                 }
-        
-        // 한글 숫자 + 조/억/만 달러
-        let koreanDigits: [(String, Double)] = [
-            ("일", 1), ("이", 2), ("삼", 3), ("사", 4), ("오", 5),
-            ("육", 6), ("칠", 7), ("팔", 8), ("구", 9), ("십", 10),
-        ]
 
-        for (kDigit, kValue) in koreanDigits {
-            for (unit, multiplier) in [("조 달러", 1_000_000_000_000.0), ("조달러", 1_000_000_000_000.0),
-                                        ("억 달러", 100_000_000.0), ("억달러", 100_000_000.0),
-                                        ("만 달러", 10000.0), ("만달러", 10000.0)] {
-                let escaped = NSRegularExpression.escapedPattern(for: unit)
-                let pattern = "\(kDigit)\\s*\(escaped)"
-                guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { continue }
-
-                let nsText = output as NSString
-                let matches = regex.matches(in: output, range: NSRange(location: 0, length: nsText.length))
-
-                for match in matches.reversed() {
-                    let fullMatch = nsText.substring(with: match.range)
-                    let afterIndex = match.range.location + match.range.length
-                    if afterIndex < nsText.length && nsText.character(at: afterIndex) == Character("(").asciiValue! { continue }
-
-                    let usd = kValue * multiplier
-                    let krw = usd * usdRate
-                    let krwText = formatKRW(krw)
-                    output = (output as NSString).replacingCharacters(in: match.range, with: "\(fullMatch)(\(krwText))")
-                }
-            }
-        }
+        // v3.7.0: '한글 숫자(일~십) + 달러' 블록 제거.
+        //  "수십억 달러", "이십억 달러"처럼 '십' 앞에 다른 글자가 오면 '십'만 잡아
+        //  10억 달러로 오변환되던 문제. (금액은 거의 항상 아라비아 숫자로 나오므로 위 블록으로 충분)
 
         return output
     }

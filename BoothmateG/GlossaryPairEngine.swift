@@ -2,8 +2,15 @@
 //  GlossaryPairEngine.swift
 //  BoothmateG
 //
-//  Version: 1.5.0
+//  Version: 1.8.0
 //  Changelog:
+//    1.8.0 - 타겟 언어 별칭으로 타겟 교체 경로 추가. 별칭 언어가 타겟 언어와 같으면(예: 한영에서
+//            영어 음역 "Cheongung II") 타겟에서 그 별칭을 찾아 표준표기로 교체. 원문에 방아쇠어가
+//            있어 발동된 경우에만 동작(안전). AI가 만든 음역을 유사어 등록으로 잡기 위함.
+//    1.7.0 - 유사어(sourceAliases)를 언어 무관하게 처리. 별칭 언어가 원문 언어와 같을 때 방아쇠로 인정.
+//            한국어 연사 오인식(전군2호)뿐 아니라 영어 연사의 음차 오인식(Cheongunino 등)도 잡아 통일.
+//    1.6.0 - sourceAliases(유사어/오인식 표기) 지원: 한국어 원문에서 source 대신 별칭이 잡혀도
+//            용어 발동. 타겟에 별칭이 원문 그대로 남으면 canonical로 교체. (고유명사 누락 방지)
 //    1.5.0 - phrase(여러 단어 구) 부분 매칭·자기 간섭 버그 수정. 통합 치환(applySubstitutions):
 //            (1) 방아쇠 구 전체를 치환 후보에 추가(통짜 매칭), (2) 긴 표현의 부분 조각인 유사
 //            표현 제거(예 government budget), (3) 이미 치환한 영역 보호로 재치환·중복 차단.
@@ -57,8 +64,34 @@ final class GlossaryPairEngine {
                 replaceWith = aIsKorean ? a : b
             }
 
-            // 원문에 방아쇠어가 있나?
-            guard sourceContains(source, phrase: trigger) else { continue }
+            // 원문에 방아쇠어가 있나? (없으면 별칭으로도 확인)
+            var triggered = sourceContains(source, phrase: trigger)
+
+            // v1.7.0: source의 유사어(오인식 표기)도 방아쇠로 인정.
+            //  한국어 연사: "천궁2호"를 "전군2호"로 잘못 들어도 한국어 별칭이 잡힘.
+            //  영어 연사: AI가 "천궁2호"를 "Cheongunino"처럼 음차해도 영어 별칭이 잡힘.
+            //  핵심: 별칭의 언어가 원문 언어(srcIsKorean)와 같을 때만 그 별칭을 원문에서 찾는다.
+            var aliasHits: [String] = []
+            // v1.8.0: 타겟 언어와 같은 별칭 — 타겟(번역문)에서 표준표기로 교체할 후보.
+            //  예: 한영(원문 한국어)에서 AI가 만든 영어 음역 별칭("Cheongung II")을 타겟에서 잡기 위함.
+            var targetAliasHits: [String] = []
+            for alias in p.sourceAliases {
+                let al = alias.trimmingCharacters(in: .whitespaces)
+                guard !al.isEmpty else { continue }
+                let aliasIsKorean = containsHangul(al)
+                if aliasIsKorean == srcIsKorean {
+                    // 기존: 별칭 언어가 원문 언어와 같으면 원문에서 방아쇠로 사용
+                    if sourceContains(source, phrase: al) {
+                        triggered = true
+                        aliasHits.append(al)
+                    }
+                } else {
+                    // v1.8.0 추가: 별칭 언어가 타겟 언어와 같으면 타겟 교체 후보로 모음(아래에서 사용)
+                    targetAliasHits.append(al)
+                }
+            }
+
+            guard triggered else { continue }
 
             // 타겟에서 바꿀 번역어들: 학습된 유사 표현 + 방아쇠 구 자체(원문 구가 타겟에 안 번역돼 남은 경우 통째 치환)
             for t in p.learnedTargets {
@@ -69,6 +102,17 @@ final class GlossaryPairEngine {
             // 방아쇠 구 전체도 후보로(예: "government budget proposal"이 타겟에 그대로 남으면 → "정부 예산안")
             if trigger != replaceWith {
                 subs.append((trigger, replaceWith))
+            }
+            // v1.7.0: 별칭이 타겟에 원문 그대로 남은 경우도 canonical로 교체.
+            //  (한국어 연사: "전군2호"→"Sky Pierce II" / 영어 연사: 타겟 한국어에 "Cheongunino"가 남으면 "천궁2호")
+            for al in aliasHits where al != replaceWith {
+                subs.append((al, replaceWith))
+            }
+            // v1.8.0: 타겟 언어 별칭(AI가 만든 음역 등)이 타겟에 나타나면 표준표기로 교체.
+            //  원문에 방아쇠어가 있어 발동된 경우에만 도달하므로 안전.
+            //  예: 한영에서 원문 "천궁2호" 발동 → 타겟의 "Cheongung II"(영어 음역 별칭) → "SKY Pierce II"
+            for al in targetAliasHits where al != replaceWith {
+                subs.append((al, replaceWith))
             }
         }
         guard !subs.isEmpty else {
