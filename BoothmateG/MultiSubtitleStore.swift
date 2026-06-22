@@ -2,8 +2,11 @@
 //  MultiSubtitleStore.swift
 //  BoothmateG
 //
-//  Version: 1.6.0
+//  Version: 1.7.0
 //  Changelog:
+//    1.7.0 - [통합] 문장 확정 기준을 한국어 → 입력 원문(currentSource)으로 변경.
+//            양방향에서 입력 언어가 바뀌어도 원문 문장부호로 끊는다.
+//            (sourceIsKorean 분기 폐기 — 값은 남으나 미사용)
 //    1.0.0 - 최초 작성. 화자 원문 + 여러 언어 번역을 함께 보관.
 //    1.1.0 - 번역 진행 줄 맨 앞 공백 제거 (한 칸 들여쓰기처럼 보이는 현상 방지)
 //    1.2.0 - updateTarget(id,lang,newText)/updateSource(id,newText)/commitCurrentForEditing() 추가
@@ -103,13 +106,11 @@ final class MultiSubtitleStore: ObservableObject {
     private let sentenceEnders: Set<Character> = [".", "!", "?", "。", "！", "？"]
 
     private func koreanText() -> String {
-        // 화자(원문)가 한국어인 경우
-        if sourceIsKorean { return currentSource }
-        // 청중 언어 중 한국어 번역
-        if let ko = currentTargets["ko"], !ko.isEmpty { return ko }
-        // 한국어가 아예 없으면 원문으로 폴백
-        return currentSource
-    }
+            // v1.7.0: [통합] 입력 원문(어느 언어든) 기준으로 문장 확정.
+            //   양방향에서 입력이 한국어/영어로 바뀌어도 currentSource의
+            //   문장부호로 끊는다. (sourceIsKorean 분기 폐기)
+            return currentSource
+        }
 
     // 화자 언어가 한국어인지 여부 (ContentView가 설정). 기본은 false.
     var sourceIsKorean: Bool = false

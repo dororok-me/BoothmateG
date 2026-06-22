@@ -2,8 +2,12 @@
 //  ContentView.swift
 //  BoothmateG
 //
-//  Version: 2.67.0
+//  Version: 2.68.0
 //  Changelog:
+//    2.68.0 - [통합] 화자(multiSourceLang) 개념 제거. 고른 언어가 곧 번역어(targets).
+//             화자 picker 삭제 / audienceLangs에서 화자 빼던 필터 3곳 제거 / startMulti targets=audienceLangs /
+//             sourceIsKorean 설정 제거(입력 자동 감지로 대체) / 공유정보 "화자:" 줄 제거·"청중 언어"→"번역어".
+//             (AppSettings.multiSourceLang 프로퍼티는 connect 호환 위해 잔존, 동작상 미사용)
 //    2.67.0 - [통합 3단계] 다국어 오버레이에 용어집 음역 교정 적용(청중 자막 = 메인 콘솔 일치).
 //             multiOverlay.toggle 호출에 pairEngine 전달(MultiSeparateOverlayController v1.2.0).
 //    2.66.0 - [통합 2단계] 입력 언어가 바뀌는 지점에 가는 회색 구분선 추가(화자 전환 시각 표시).
@@ -215,7 +219,7 @@ struct ContentView: View {
             refreshInputName()
             migrateLanguageCodes()
             audio.onAudioRMS = { rms in self.lastAudioRMS = rms }  // v2.36.0
-            audienceLangs = settings.loadAudienceLangs().filter { $0 != settings.multiSourceLang }
+            audienceLangs = settings.loadAudienceLangs()   // v2.68.0: [통합] 화자 제외 필터 폐기
             multiStore.setLanguages(audienceLangs)
         }
         .onChange(of: settings.playTranslatedAudio) { _, on in
@@ -224,11 +228,6 @@ struct ContentView: View {
         .onChange(of: settings.multiAudioLang) { _, lang in
             guard isMultiRunning else { return }
             if lang.isEmpty { audioPlayer.stop() } else { audioPlayer.start() }
-        }
-        .onChange(of: settings.multiSourceLang) { _, src in
-            // 화자로 고른 언어는 청중에서 빠져야 함 (영어 화자 → 영어 청중 같은 빈 세션 방지)
-            audienceLangs = audienceLangs.filter { $0 != src }
-            multiStore.setLanguages(audienceLangs)
         }
         .sheet(isPresented: $showGlossary) {
             GlossaryView(settings: settings) { items in glossary.update(items: items) }
@@ -254,7 +253,7 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showAudienceLangs) {
             AudienceLangView(settings: settings) { langs in
-                audienceLangs = langs.filter { $0 != settings.multiSourceLang }
+                audienceLangs = langs   // v2.68.0: [통합] 화자 제외 필터 폐기
                 multiStore.setLanguages(audienceLangs)
             }
         }
@@ -390,17 +389,6 @@ struct ContentView: View {
             HStack(spacing: 5) {
                 Image(systemName: "globe").font(.caption)
                 Text("다국어").font(.caption.bold())
-                Text("· 화자").font(.caption2)
-                Picker("", selection: $settings.multiSourceLang) {
-                    ForEach(supportedLanguages) { lang in
-                        Text(lang.label).tag(lang.id)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .controlSize(.small)
-                .fixedSize()
-                .disabled(isRunning || isMultiRunning)
             }
             .foregroundStyle(.secondary)
 
@@ -1344,20 +1332,14 @@ struct ContentView: View {
             statusMessage = "❌ 설정에서 API 키를 입력하세요"; return
         }
         guard !audienceLangs.isEmpty else {
-            statusMessage = "❌ 청중 언어를 먼저 선택하세요"; return
+            statusMessage = "❌ 번역어를 먼저 선택하세요"; return
         }
 
-        // 화자 언어는 타깃에서 제외 (영어 화자인데 영어 청중 같은 빈 세션 방지)
-        var targets = audienceLangs.filter { $0 != settings.multiSourceLang }
-        guard !targets.isEmpty else {
-            statusMessage = "❌ 화자 언어와 다른 청중 언어를 선택하세요"; return
-        }
-        // v2.63.0 검증(양방향): 화자 언어도 세션으로 추가 → 입력=화자언어면 원문 전사, 아니면 번역.
-        targets.append(settings.multiSourceLang)
-        audienceLangs = targets
+        // v2.68.0: [통합] 화자 개념 제거 — 고른 언어가 곧 번역어(targets).
+        //   입력 언어는 자동 감지(MultiSubtitleStore v1.7.0: 원문 문장부호로 끊음).
+        let targets = audienceLangs
 
         multiStore.setLanguages(targets)
-        multiStore.sourceIsKorean = (settings.multiSourceLang == "ko")  // v2.48.0: 한국어 기준 문장 확정용
         statusMessage = "다국어 연결 중..."
 
         multiClient.onConnected = {
@@ -1519,8 +1501,7 @@ struct ContentView: View {
             }
 
             if !usedLangs.isEmpty {
-                lines.append("화자: \(langLabel(settings.multiSourceLang))")
-                lines.append("청중 언어: \(usedLangs.map { langLabel($0) }.joined(separator: ", "))")
+                lines.append("번역어: \(usedLangs.map { langLabel($0) }.joined(separator: ", "))")
                 lines.append("")
             }
 

@@ -2,8 +2,10 @@
 //  AudienceLangView.swift
 //  BoothmateG
 //
-//  Version: 1.2.0
+//  Version: 1.3.0
 //  Changelog:
+//    1.3.0 - [통합] 화자 개념 제거. 모든 언어를 번역어로 선택 가능(targetCandidates 필터 폐기).
+//            문구 "청중 언어"→"번역어". speakerLabel 제거(미사용).
 //    1.0.0 - 최초 작성. 청중 언어(여러 개)를 체크로 고르는 시트.
 //    1.1.0 - 불러올 때 화자 언어/유효하지 않은 코드를 제외 (개수·체크 표시 정확화).
 //    1.2.0 - 화자 기준을 단일 소스 → 다국어 화자(multiSourceLang)로 변경.
@@ -21,12 +23,12 @@ struct AudienceLangView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("청중 언어 선택").font(.title3).bold()
+                Text("번역어 선택").font(.title3).bold()
                 Spacer()
                 Text("\(selected.count)개").foregroundStyle(.secondary)
             }
 
-            Text("화자 언어(\(speakerLabel))를 아래 선택한 언어들로 동시에 번역합니다.")
+            Text("발화를 아래에서 고른 언어들로 동시에 표시·번역합니다. 입력 언어는 자동으로 감지됩니다.")
                 .font(.caption).foregroundStyle(.secondary)
 
             ScrollView {
@@ -76,12 +78,8 @@ struct AudienceLangView: View {
         }
     }
 
-    // 다국어 화자 언어는 타겟 후보에서 제외
+    // v1.3.0: [통합] 화자 개념 제거 — 모든 언어를 번역어 후보로.
     private var targetCandidates: [LangOption] {
-        supportedLanguages.filter { $0.id != settings.multiSourceLang }
-    }
-
-    private var speakerLabel: String {
-        supportedLanguages.first { $0.id == settings.multiSourceLang }?.label ?? settings.multiSourceLang
+        supportedLanguages
     }
 }
