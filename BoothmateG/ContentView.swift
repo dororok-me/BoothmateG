@@ -2,8 +2,24 @@
 //  ContentView.swift
 //  BoothmateG
 //
-//  Version: 2.62.0
+//  Version: 2.67.0
 //  Changelog:
+//    2.67.0 - [통합 3단계] 다국어 오버레이에 용어집 음역 교정 적용(청중 자막 = 메인 콘솔 일치).
+//             multiOverlay.toggle 호출에 pairEngine 전달(MultiSeparateOverlayController v1.2.0).
+//    2.66.0 - [통합 2단계] 입력 언어가 바뀌는 지점에 가는 회색 구분선 추가(화자 전환 시각 표시).
+//             확정 세그먼트를 순회하며 이전 세그먼트와 입력 언어(detectLang)가 다르면 1px 선 삽입.
+//             세로 공간을 거의 안 먹어 화면이 넓어지지 않음.
+//    2.65.0 - [통합 1단계] 다국어 양방향에서 입력 언어와 같은 칸에는 용어집 교정을 적용하지 않음.
+//             입력 텍스트 언어 판별(detectLang) 추가 → 한국어 입력→한국어 칸에 한영 교정이 거꾸로
+//             걸려 "천궁2호"가 "SKY Pierce II"로 바뀌던 문제 해결. 입력≠칸 언어일 때만 apply.
+//    2.64.0 - [다국어 용어집/정지유지] 단일에서 쓰던 용어집 후처리를 다국어에 그대로 적용.
+//             (1) startMulti에서 pairEngine.update로 용어집 로드(단일 start와 동일, 빠져 있었음).
+//             (2) multiSegmentRow 각 언어 칸에 pairEngine.apply(원문 대조 음역 교정) — 단일 패턴 그대로.
+//             (3) 정지 후에도 다국어 자막 유지(세그먼트 남으면 multiSourceScroll, 자막 리셋 전까지).
+//    2.63.0 - [다국어 양방향 검증] startMulti에서 화자 언어도 번역어(targets)에 포함.
+//             각 세션은 입력을 자동 감지하므로(GeminiLiveClient sendSetup이 sourceLang을 안 씀),
+//             입력=그 언어면 원문(echo), 아니면 번역. 선택한 모든 언어가 서로 양방향이 됨.
+//             1303행 한 곳만 변경(화면 칸·multiStore는 targets를 따라 자동 반영).
 //    2.62.0 - [한영 음역 교정] 새 방식 용어집을 코드 후처리로 연결(GlossaryPairEngine).
 //             확정 자막(SegmentRow.finishedTarget)에서 원문 대조로 AI가 놓친 음역(예: Cheongung-2)을
 //             표준표기(SKY Pierce II)로 교정. '이 방식 사용' ON일 때만. 진행 중 자막은 다음 단계.
@@ -414,7 +430,7 @@ struct ContentView: View {
                 // v2.37.0: 순서 변경 — 시작 · 오버레이 · 음성 · 자막리셋 · 카운터
                 overlayToggleButton(isOn: multiOverlay.isVisible, color: .blue, help: "다국어 오버레이") {
                     if multiStore.langs.isEmpty { multiStore.setLanguages(audienceLangs) }
-                    multiOverlay.toggle(store: multiStore, glossary: glossary, mainWindow: NSApp.keyWindow)
+                    multiOverlay.toggle(store: multiStore, glossary: glossary, pairEngine: pairEngine, mainWindow: NSApp.keyWindow)
                 }
 
                 multiAudioMenu
@@ -460,6 +476,24 @@ struct ContentView: View {
     // 언어 코드 → 짧은 표기
     private func langShort(_ code: String) -> String {
         supportedLanguages.first { $0.id == code }.map { String($0.label.prefix(6)) } ?? code
+    }
+
+    // v2.65.0: 입력 텍스트의 주 언어 코드 추정. 입력 언어와 같은 칸에는 용어집 교정을 건너뛰기 위함
+    //          (한국어 입력→한국어 칸에 한영 교정이 거꾸로 걸려 천궁2호→SKY Pierce II 되던 문제 방지).
+    private func detectLang(_ text: String) -> String {
+        for ch in text.unicodeScalars {
+            if (0xAC00...0xD7A3).contains(ch.value) { return "ko" }   // 한글
+            if (0x3040...0x30FF).contains(ch.value) { return "ja" }   // 히라가나/가타카나
+        }
+        for ch in text.unicodeScalars {
+            if (0x4E00...0x9FFF).contains(ch.value) { return "zh" }   // CJK 한자(가나 없으면 중국어로 추정)
+        }
+        return "en"
+    }
+
+    // v2.65.0: 입력 언어와 표시 칸 언어가 같은 언어인지(중국어 간/번체는 같은 언어로 취급).
+    private func isSourceLang(_ srcLang: String, _ lang: String) -> Bool {
+        srcLang == lang || (srcLang == "zh" && lang.hasPrefix("zh"))
     }
 
     // 경과 타이머 (줄바꿈 방지: fixedSize). start가 nil이면 00:00:00 회색.
@@ -515,7 +549,8 @@ struct ContentView: View {
     // ═══════════════ 콘솔 자막 ═══════════════
     @ViewBuilder
     private var subtitleScroll: some View {
-        if isMultiRunning { multiSourceScroll } else { pairScroll }
+        // v2.64.0: 정지 후에도 다국어 자막 유지(세그먼트가 남아 있으면). 단일 실행 중이면 단일 우선.
+        if isMultiRunning || (!isRunning && !multiStore.segments.isEmpty) { multiSourceScroll } else { pairScroll }
     }
 
     // v2.61.0: 패널 폭 조절용 드래그 구분선
@@ -624,7 +659,15 @@ struct ContentView: View {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     // 확정된 세그먼트: 원문 + 각 언어 번역
                     // v2.53.0: 최근 80개만 렌더(성능). 전체 기록은 전사문에 저장됨.
-                    ForEach(multiStore.segments.suffix(80)) { seg in
+                    // v2.66.0: 입력 언어가 바뀌는 지점에 가는 구분선(화자 전환을 시각적으로 표시).
+                    let recentSegs = Array(multiStore.segments.suffix(80))
+                    ForEach(Array(recentSegs.enumerated()), id: \.element.id) { idx, seg in
+                        if idx > 0 && detectLang(recentSegs[idx - 1].source) != detectLang(seg.source) {
+                            Rectangle()
+                                .fill(Color.gray.opacity(0.25))
+                                .frame(height: 1)
+                                .padding(.vertical, 2)
+                        }
                         multiSegmentRow(seg)
                     }
                     // 진행 중(회색) 자막: 원문 + 각 언어 번역
@@ -657,13 +700,18 @@ struct ContentView: View {
             }
             ForEach(multiStore.langs, id: \.self) { lang in
                 if let t = seg.targets[lang], !t.isEmpty {
+                    // v2.65.0: 입력 언어와 같은 칸은 원문 그대로(한영 교정이 거꾸로 걸리는 것 방지).
+                    let normalized = glossary.normalize(t)
+                    let displayed = isSourceLang(detectLang(seg.source), lang)
+                        ? normalized
+                        : pairEngine.apply(source: seg.source, target: normalized)
                     HStack(alignment: .top, spacing: 6) {
                         Text("\(langShort(lang)):")
                             .font(.system(size: CGFloat(targetFont) * 0.7, weight: .semibold))
                             .foregroundStyle(.blue.opacity(0.7))
                             .padding(.top, 2)
                         EditableSubtitleText(
-                            text: glossary.normalize(t),
+                            text: displayed,  // v2.65.0: 입력=칸 언어면 교정 스킵
                             fontSize: CGFloat(targetFont),
                             bold: false,
                             color: .primary,
@@ -1300,10 +1348,12 @@ struct ContentView: View {
         }
 
         // 화자 언어는 타깃에서 제외 (영어 화자인데 영어 청중 같은 빈 세션 방지)
-        let targets = audienceLangs.filter { $0 != settings.multiSourceLang }
+        var targets = audienceLangs.filter { $0 != settings.multiSourceLang }
         guard !targets.isEmpty else {
             statusMessage = "❌ 화자 언어와 다른 청중 언어를 선택하세요"; return
         }
+        // v2.63.0 검증(양방향): 화자 언어도 세션으로 추가 → 입력=화자언어면 원문 전사, 아니면 번역.
+        targets.append(settings.multiSourceLang)
         audienceLangs = targets
 
         multiStore.setLanguages(targets)
@@ -1345,6 +1395,8 @@ struct ContentView: View {
                                                guide: settings.interpretGuide,
                                                blacklist: settings.blacklistWords)
             : ""
+        // v2.64.0: 다국어도 단일과 동일하게 용어집 후처리 엔진 로드(각 언어 칸에 apply 적용 위함).
+        pairEngine.update(pairs: settings.useGlossaryPairMode ? settings.loadGlossaryPairs() : [])
         multiClient.connect(apiKey: settings.geminiApiKey, sourceLang: settings.multiSourceLang, targets: targets, glossaryInstruction: multiGlossary, eventInfo: eventInfo)
 
         do {

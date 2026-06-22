@@ -2,8 +2,10 @@
 //  GlossaryPairEngine.swift
 //  BoothmateG
 //
-//  Version: 1.8.0
+//  Version: 1.9.0
 //  Changelog:
+//    1.9.0 - apply 결과 캐싱. 같은 (원문,번역) 입력은 재계산·로그 없이 즉시 반환 →
+//            화면 재렌더마다 반복되던 과다 호출·로그 도배 해소(부하 감소). update 시 캐시 무효화.
 //    1.8.0 - 타겟 언어 별칭으로 타겟 교체 경로 추가. 별칭 언어가 타겟 언어와 같으면(예: 한영에서
 //            영어 음역 "Cheongung II") 타겟에서 그 별칭을 찾아 표준표기로 교체. 원문에 방아쇠어가
 //            있어 발동된 경우에만 동작(안전). AI가 만든 음역을 유사어 등록으로 잡기 위함.
@@ -35,13 +37,21 @@ final class GlossaryPairEngine {
 
     func update(pairs: [GlossaryPair]) {
         self.pairs = pairs
+        applyCache.removeAll()   // v1.9.0: 용어집이 바뀌면 캐시 무효화(옛 결과 방지)
     }
+
+    // v1.9.0: apply 결과 캐시. 같은 (원문,번역) 입력엔 재계산 없이 즉시 반환(화면 재렌더 부하·로그 도배 감소).
+    private var applyCache: [String: String] = [:]
+    private let applyCacheLimit = 600
 
     // 원문 + 타겟을 받아, 양방향으로 매칭해 타겟을 교정.
     //  - 원문 언어 판별 → pair에서 그 언어 쪽 단어를 방아쇠, 반대쪽을 표준표기로.
     //  - 원문에 방아쇠어가 (규칙대로) 있으면 → 타겟에서 번역어(learnedTargets)를 표준표기로 교체.
     func apply(source: String, target: String) -> String {
         guard !pairs.isEmpty, !target.isEmpty, !source.isEmpty else { return target }
+        // v1.9.0: 캐시 히트면 재계산·로그 없이 즉시 반환.
+        let cacheKey = source + "\u{1}" + target
+        if let cached = applyCache[cacheKey] { return cached }
         let srcIsKorean = containsHangul(source)
 
         var subs: [(from: String, to: String)] = []
@@ -117,13 +127,21 @@ final class GlossaryPairEngine {
         }
         guard !subs.isEmpty else {
             print("[BMG][PairGlossary] 호출됨: pairs=\(pairs.count) src=\(source.prefix(25)) → 매칭 0 (변화 없음)")
+            storeCache(cacheKey, target)   // v1.9.0
             return target
         }
 
         // v1.5.0: 겹침/부분조각/자기간섭을 막는 통합 치환(전체 일치 + 영역 보호).
         let result = applySubstitutions(target, subs: subs)
         print("[BMG][PairGlossary] 교체: \(target.prefix(25)) → \(result.prefix(25))")
+        storeCache(cacheKey, result)   // v1.9.0
         return result
+    }
+
+    // v1.9.0: 캐시에 저장(상한 초과 시 비우기). 자막은 보통 수백 개 이하라 단순 비우기로 충분.
+    private func storeCache(_ key: String, _ value: String) {
+        if applyCache.count >= applyCacheLimit { applyCache.removeAll() }
+        applyCache[key] = value
     }
 
     // v1.5.0: 모든 치환을 "전체 일치 + 이미 치환한 영역 보호"로 한 번에 수행.

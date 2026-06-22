@@ -2,8 +2,11 @@
 //  MultiSeparateOverlayController.swift
 //  BoothmateG
 //
-//  Version: 1.1.0
+//  Version: 1.2.0
 //  Changelog:
+//    1.2.0 - 메인 콘솔과 동일한 용어집 음역 교정을 오버레이에도 적용(청중 자막 = 메인 콘솔 일치).
+//            syncLang에서 pairEngine.apply 적용 + 입력=칸 언어면 스킵(detectLang/isSourceLang).
+//            show/toggle에 pairEngine 인자 추가.
 //    1.1.0 - 창 겹침 방지: 처음 뜨는 언어 창에 cascadeIndex 부여(계단식 배치).
 //    1.0.0 - 다국어 오버레이를 "언어별 독립 창"으로 띄우는 컨트롤러.
 //            청중 언어 수만큼 단일 오버레이(OverlayWindowController)를 생성하여,
@@ -26,20 +29,22 @@ final class MultiSeparateOverlayController {
     private var cancellables: Set<AnyCancellable> = []
     private weak var multiStore: MultiSubtitleStore?
     private var glossary: GlossaryEngine?
+    private var pairEngine: GlossaryPairEngine?   // v1.2.0: 메인 콘솔과 동일한 용어집 음역 교정용
     private weak var mainWindow: NSWindow?
 
     // 하나라도 떠 있으면 true (상단 토글 버튼 표시용)
     var isVisible: Bool { controllers.values.contains { $0.isVisible } }
 
-    func toggle(store: MultiSubtitleStore, glossary: GlossaryEngine, mainWindow: NSWindow?) {
+    func toggle(store: MultiSubtitleStore, glossary: GlossaryEngine, pairEngine: GlossaryPairEngine, mainWindow: NSWindow?) {
         if isVisible { hide() }
-        else { show(store: store, glossary: glossary, mainWindow: mainWindow) }
+        else { show(store: store, glossary: glossary, pairEngine: pairEngine, mainWindow: mainWindow) }
     }
 
-    func show(store: MultiSubtitleStore, glossary: GlossaryEngine, mainWindow: NSWindow?) {
+    func show(store: MultiSubtitleStore, glossary: GlossaryEngine, pairEngine: GlossaryPairEngine, mainWindow: NSWindow?) {
         guard !store.langs.isEmpty else { return }
         self.multiStore = store
         self.glossary = glossary
+        self.pairEngine = pairEngine   // v1.2.0
         self.mainWindow = mainWindow
 
         // 언어별 컨트롤러·store 준비 후 표시
@@ -108,7 +113,11 @@ final class MultiSeparateOverlayController {
             let tgt = seg.targets[lang] ?? ""
             // 원문 또는 번역 중 하나라도 있으면 표시
             guard !seg.source.isEmpty || !tgt.isEmpty else { continue }
-            let normTgt = g?.normalize(tgt) ?? tgt
+            var normTgt = g?.normalize(tgt) ?? tgt
+            // v1.2.0: 메인 콘솔과 동일한 용어집 음역 교정. 입력=칸 언어면 스킵(원문 보존).
+            if let pe = pairEngine, !isSourceLang(detectLang(seg.source), lang) {
+                normTgt = pe.apply(source: seg.source, target: normTgt)
+            }
             segs.append(SubtitleSegment(sourceText: seg.source, targetText: normTgt))
         }
         st.segments = segs
@@ -117,5 +126,22 @@ final class MultiSeparateOverlayController {
         st.currentSource = ms.currentSource
         let liveTgt = ms.currentTargets[lang] ?? ""
         st.currentTarget = g?.normalize(liveTgt) ?? liveTgt
+    }
+
+    // v1.2.0: 입력 텍스트 주 언어 추정(메인 콘솔 detectLang과 동일 규칙). 입력=칸이면 교정 스킵용.
+    private func detectLang(_ text: String) -> String {
+        for ch in text.unicodeScalars {
+            if (0xAC00...0xD7A3).contains(ch.value) { return "ko" }   // 한글
+            if (0x3040...0x30FF).contains(ch.value) { return "ja" }   // 히라가나/가타카나
+        }
+        for ch in text.unicodeScalars {
+            if (0x4E00...0x9FFF).contains(ch.value) { return "zh" }   // CJK 한자(가나 없으면 중국어로 추정)
+        }
+        return "en"
+    }
+
+    // v1.2.0: 입력 언어와 표시 칸 언어가 같은 언어인지(중국어 간/번체는 같은 언어로 취급).
+    private func isSourceLang(_ srcLang: String, _ lang: String) -> Bool {
+        srcLang == lang || (srcLang == "zh" && lang.hasPrefix("zh"))
     }
 }

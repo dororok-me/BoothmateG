@@ -2,12 +2,15 @@
 //  AudioEngine.swift
 //  BoothmateG
 //
-//  Version: 2.1.0
+//  Version: 2.2.0
 //  Changelog:
 //    1.0.0 - 최초 작성. AVAudioConverter로 변환
 //    2.0.0 - 다채널/Aggregate Device 대응:
 //            첫 번째 채널만 추출 → 직접 다운샘플링하여 16kHz Int16 PCM 생성
 //    2.1.0 - RMS 콜백 추가 (음성 자동 중지용): onAudioRMS
+//    2.2.0 - 정지 다운(-10877/overload) 완화: running 플래그 추가. stop()에서 먼저 내려
+//            진행 중 process 콜백이 끊긴 소켓 전송·정리작업을 건드리지 않게(race 차단).
+//            start 끝에서 running=true, process 맨 앞 guard running.
 //
 
 import Foundation
@@ -23,6 +26,8 @@ final class AudioEngine {
     private let engine = AVAudioEngine()
     private let targetSampleRate: Double = 16000
     private var sourceSampleRate: Double = 48000  // 실제 마이크 샘플레이트 (start 시점에 설정됨)
+    // v2.2.0: 정지 후 진행 중 오디오 콜백 무해화용. stop()에서 먼저 내리고, process가 확인.
+    private var running = false
 
     func start() throws {
         let input = engine.inputNode
@@ -49,15 +54,18 @@ final class AudioEngine {
 
         engine.prepare()
         try engine.start()
+        running = true   // v2.2.0: 엔진 가동 후 콜백 활성화
     }
 
     func stop() {
+        running = false   // v2.2.0: 콜백 먼저 차단 → 정지 중 process가 끊긴 소켓/정리작업을 건드리지 않게
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
     }
 
     // 들어온 Float32 버퍼 → 첫 채널 추출 → 16kHz Int16 PCM
     private func process(buffer: AVAudioPCMBuffer) {
+        guard running else { return }   // v2.2.0: 정지 후 진행 중 콜백 즉시 종료(race·끊긴 소켓 전송 방지)
         guard let floatData = buffer.floatChannelData else { return }
         let frameCount = Int(buffer.frameLength)
         guard frameCount > 0 else { return }
