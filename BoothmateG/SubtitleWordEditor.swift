@@ -2,8 +2,14 @@
 //  SubtitleWordEditor.swift
 //  BoothmateG
 //
-//  Version: 1.6.0
+//  Version: 1.7.0
 //  Changelog:
+//    1.7.0 - [무지개 멈춤 해결] 단어(Text)마다 .popover를 하나씩 달던 구조가
+//            화면의 자막 줄 수 × 언어 × 단어 수만큼 popover 앵커를 만들어(수천 개)
+//            SwiftUI 레이아웃 비교(AG::LayoutDescriptor::compare)를 폭발시켜 메인 스레드를
+//            마비(무지개)시키던 문제를 해결. .popover를 ForEach 단어 밖으로 빼서
+//            EditableSubtitleText 당 1개만 띄우도록 통합(editingIndex로 어느 단어인지 관리).
+//            더블클릭 편집 기능·블록 선택·확정 동작은 그대로. popover 개수만 줄어듦.
 //    1.6.0 - 진행 중(인식 중) 자막 굵기를 확정 자막과 동일하게: bold일 때 .medium → .bold.
 //            (굵게 토글 시 진행 중 자막도 확정 자막처럼 확실히 굵어지게. 편집창 폰트도 일관 적용.)
 //    1.0.0 - 최초 작성.
@@ -105,6 +111,8 @@ struct EditableSubtitleText: View {
     }
 
     var body: some View {
+        // v1.7.0: popover를 단어마다 달던 것을 제거하고, 아래 .popover 하나로 통합.
+        //         (단어 수천 개 × popover 앵커 → AG 레이아웃 비교 폭발/무지개 방지)
         FlowLayout(spacing: wordSpacing, lineSpacing: 4) {
             ForEach(Array(tokens.enumerated()), id: \.offset) { idx, word in
                 Text(word)
@@ -118,27 +126,29 @@ struct EditableSubtitleText: View {
                         selectRange = wordRange(idx)
                         editingIndex = idx
                     }
-                    .popover(isPresented: Binding(
-                        get: { editingIndex == idx },
-                        set: { if !$0 { editingIndex = nil } }
-                    )) {
-                        VStack(alignment: .trailing, spacing: 6) {
-                            InputLanguageBadge()
-                            AutoSelectTextField(
-                                text: $draft,
-                                fontSize: fontSize,
-                                bold: bold,
-                                selectRange: selectRange,
-                                onCommit: { commit() },
-                                onCancel: { editingIndex = nil }
-                            )
-                            .frame(width: 420, height: 120)
-                        }
-                        .padding(10)
-                    }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // v1.7.0: 이 줄(EditableSubtitleText) 전체에 popover 1개만. 어느 단어를 눌렀는지는
+        //         editingIndex로 이미 알고 draft/selectRange에 담겨 있으므로 동작은 동일.
+        .popover(isPresented: Binding(
+            get: { editingIndex != nil },
+            set: { if !$0 { editingIndex = nil } }
+        )) {
+            VStack(alignment: .trailing, spacing: 6) {
+                InputLanguageBadge()
+                AutoSelectTextField(
+                    text: $draft,
+                    fontSize: fontSize,
+                    bold: bold,
+                    selectRange: selectRange,
+                    onCommit: { commit() },
+                    onCancel: { editingIndex = nil }
+                )
+                .frame(width: 420, height: 120)
+            }
+            .padding(10)
+        }
         .onChange(of: editingIndex) { _, newValue in
             isEditing = (newValue != nil)
         }

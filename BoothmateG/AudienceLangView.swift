@@ -2,8 +2,9 @@
 //  AudienceLangView.swift
 //  BoothmateG
 //
-//  Version: 1.3.0
+//  Version: 1.4.0
 //  Changelog:
+//    1.4.0 - 번역어(동시 세션) 상한 4개 추가(과부하·다운 방지). 4개 도달 시 더 못 고르고 안내.
 //    1.3.0 - [통합] 화자 개념 제거. 모든 언어를 번역어로 선택 가능(targetCandidates 필터 폐기).
 //            문구 "청중 언어"→"번역어". speakerLabel 제거(미사용).
 //    1.0.0 - 최초 작성. 청중 언어(여러 개)를 체크로 고르는 시트.
@@ -19,13 +20,15 @@ struct AudienceLangView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var selected: Set<String> = []
+    private let maxLangs = 4   // v1.4.0: 번역어(동시 세션) 상한 — 과부하·다운 방지
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("번역어 선택").font(.title3).bold()
                 Spacer()
-                Text("\(selected.count)개").foregroundStyle(.secondary)
+                Text("\(selected.count) / \(maxLangs)개")
+                    .foregroundStyle(selected.count >= maxLangs ? .orange : .secondary)
             }
 
             Text("발화를 아래에서 고른 언어들로 동시에 표시·번역합니다. 입력 언어는 자동으로 감지됩니다.")
@@ -36,7 +39,7 @@ struct AudienceLangView: View {
                     ForEach(targetCandidates) { lang in
                         Button {
                             if selected.contains(lang.id) { selected.remove(lang.id) }
-                            else { selected.insert(lang.id) }
+                            else if selected.count < maxLangs { selected.insert(lang.id) }   // v1.4.0: 상한 초과 시 무시
                         } label: {
                             HStack(spacing: 10) {
                                 Image(systemName: selected.contains(lang.id) ? "checkmark.circle.fill" : "circle")
@@ -54,7 +57,7 @@ struct AudienceLangView: View {
             }
 
             HStack {
-                Text("세션이 언어 수만큼 늘어 비용도 비례해서 증가해요.")
+                Text("최대 \(maxLangs)개까지. 세션이 언어 수만큼 늘어 비용·부하도 함께 증가해요.")
                     .font(.caption2).foregroundStyle(.secondary)
                 Spacer()
                 Button("취소") { dismiss() }

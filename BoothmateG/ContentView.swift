@@ -2,8 +2,40 @@
 //  ContentView.swift
 //  BoothmateG
 //
-//  Version: 2.68.0
+//  Version: 2.79.0
 //  Changelog:
+//    2.79.0 - [반영 로그 다국어 지원] 그동안 logReflections가 단일 모드(subtitles)에서만 호출돼
+//             다국어 통역 시 반영 로그가 항상 비어 있었음. multiStore.onSegmentCommitted(문장 확정 콜백)에서도
+//             원문+모든 언어 번역을 합쳐 logReflections를 호출하도록 추가.
+//    2.78.0 - [영어 칸 사라짐 수정] 확정 다국어 자막에서 입력=칸 언어이면 그 칸에 원문(전사)을 항상 표시.
+//             기존엔 seg.targets[lang]이 비면 칸을 통째로 안 그려, 영어 입력 시 English 칸이 사라졌음.
+//             이제 원문=타겟어 칸은 전사, 다른 언어 입력 시 그 칸이 번역으로 전환. (편집도 isSrc면 updateSource)
+//    2.77.0 - [무지개 결정타] 다국어 자막의 LazyVStack → VStack. 스택 추적 결과 무지개의 공통 지점이
+//             LazyVStack의 배치 재계산(LazySubviewPlacements.updateValue/updatePrefetchPhases/arrayDestroy)
+//             이었음. 표시 줄이 15줄로 적으므로 VStack이 그 경로 자체를 없애 안정적.
+//    2.76.0 - [헤더 잘림 수정] multiColumn 고정폭(520/300) 제거 → 선택 언어 박스 수만큼 헤더가
+//             자연스럽게 늘어나 우측이 잘리지 않음(fixedSize). 언어 박스 줄의 가로 스크롤은 불필요해져 제거.
+//    2.75.0 - [무지개 완화] 다국어 콘솔 표시 자막을 80→15줄로 축소. 입력 언어 전환(일→영 등)이나
+//             조작 순간 SwiftUI 무효화(AG propagate_dirty/flushTransactions/compare)가 폭발하던 것을,
+//             화면 뷰 트리를 줄여 완화. 전체 기록은 전사문에 그대로 저장됨.
+//    2.74.0 - [상단 UI 동작] 언어 박스를 1줄 가로 배열로(2열 폐기, 넘치면 가로 스크롤) /
+//             국기+언어명 탭 시 그 언어를 번역 언어에서 해제(removeLang) /
+//             오버레이 토글은 모양 고정하고 켜짐=초록·꺼짐=회색 색으로만 구별(아이콘 변형 제거).
+//    2.73.0 - [상단 UI 레이아웃 보정] 언어 박스가 폭에 따라 줄어/잘리던 것 방지(fixedSize) /
+//             국기·언어명·오버레이 아이콘 크기 키움 / 언어 2개 이하 1줄·3개 이상 2열 배치(langBoxesGrid) /
+//             "번역 언어"·"변경" 버튼 글자 키움 / 언어명을 네이티브 표기로(langName).
+//    2.72.0 - [상단 UI 개편] 지구본 "다국어" 줄 삭제 / "선택 언어:" → "번역 언어"(+선택·변경 버튼) /
+//             선택한 언어를 국기+언어명 박스로 나열하고 박스마다 오버레이 개별 토글(언어별 창 ON/OFF) /
+//             음성 메뉴 삭제. flagEmoji(국기)·langOverlayBox 추가, overlayOnLangs 상태 추가.
+//             (오버레이 언어별 제어는 MultiSeparateOverlayController v1.3.0)
+//    2.71.0 - [CPU 폭주 해결] 마이크 RMS를 @State(lastAudioRMS)로 갱신하던 것 제거. 이 값은 화면에
+//             안 쓰이는데도 초당 십수 회 전체 뷰를 재렌더시켜 CPU 100%·조작 다운을 유발했음.
+//             이제 audio.lastRMS(AudioEngine v2.4.0)를 무음 타이머가 직접 읽음. onAudioRMS 콜백 제거.
+//    2.70.0 - 동시 세션(번역어) 상한 4개: startMulti에서 초과 저장분은 앞 4개만 사용(과부하·다운 방지).
+//             선택 UI 제한은 AudienceLangView v1.4.0.
+//    2.69.0 - [통합] 단일 언어 모드 화면 숨김(#if false로 코드 보존). 상단 헤더의 단일 영역과
+//             subtitleScroll의 단일 분기를 비활성화 → 화면은 다국어로 일원화. 되살리려면 #if false→#if true.
+//             (단일 관련 함수/뷰는 그대로 남아 미사용 경고가 날 수 있으나 빌드엔 지장 없음)
 //    2.68.0 - [통합] 화자(multiSourceLang) 개념 제거. 고른 언어가 곧 번역어(targets).
 //             화자 picker 삭제 / audienceLangs에서 화자 빼던 필터 3곳 제거 / startMulti targets=audienceLangs /
 //             sourceIsKorean 설정 제거(입력 자동 감지로 대체) / 공유정보 "화자:" 줄 제거·"청중 언어"→"번역어".
@@ -132,6 +164,8 @@ struct ContentView: View {
     
     @State private var overlayController = OverlayWindowController()
     @State private var multiOverlay = MultiSeparateOverlayController()   // v2.60.0: 언어별 독립 창
+    // v2.72.0: 언어별 오버레이가 켜져 있는지 UI 추적용(헤더 박스 토글 표시).
+    @State private var overlayOnLangs: Set<String> = []
 
     // v2.61.0: 반영 로그(콘솔 우측 패널) — 용어집·생략어·행사·연사 반영 내역
     @StateObject private var reflectionLog = ReflectionLogStore()
@@ -141,7 +175,7 @@ struct ContentView: View {
     // v2.36.0 추가: 음성 입력 자동 중지
     @State private var audioTimeoutTimer: Timer?
     @State private var audioSilenceTime: Double = 0
-    @State private var lastAudioRMS: Double?
+    // v2.71.0: lastAudioRMS @State 제거 — RMS는 audio.lastRMS로 읽음(전체 뷰 재렌더 폭주 차단)
 
 
     @State private var isRunning: Bool = false
@@ -218,7 +252,7 @@ struct ContentView: View {
             glossary.update(items: settings.loadGlossary())
             refreshInputName()
             migrateLanguageCodes()
-            audio.onAudioRMS = { rms in self.lastAudioRMS = rms }  // v2.36.0
+            // v2.71.0: onAudioRMS 콜백 제거 — RMS는 audio.lastRMS로 직접 읽음(@State 재렌더 폭주 차단)
             audienceLangs = settings.loadAudienceLangs()   // v2.68.0: [통합] 화자 제외 필터 폐기
             multiStore.setLanguages(audienceLangs)
         }
@@ -276,14 +310,18 @@ struct ContentView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 16))
 
             Divider().frame(height: 80)
+            // v2.69.0: [통합] 단일 모드 화면 숨김(코드 보존). 되살리려면 #if false → #if true
+            #if false
             singleColumn
                 .frame(width: isRunning ? 520 : 300, alignment: .topLeading)
                 .padding(10)
                 .background(ActivePulseBox(active: isRunning))
                 .animation(.easeInOut(duration: 0.35), value: isRunning)
             Divider().frame(height: 80)
+            #endif
             multiColumn
-                .frame(width: isMultiRunning ? 520 : 300, alignment: .topLeading)
+                // v2.76.0: 고정폭(520/300) 제거 → 선택 언어 박스 수만큼 자연스럽게 늘어남(우측 잘림 방지).
+                .fixedSize(horizontal: true, vertical: false)
                 .padding(10)
                 .background(ActivePulseBox(active: isMultiRunning))
                 .animation(.easeInOut(duration: 0.35), value: isMultiRunning)
@@ -383,24 +421,27 @@ struct ContentView: View {
         .help("번역 음성 재생 켜기/끄기")
     }
 
-    // ── 오른쪽: 다국어 ──
+    // ── 오른쪽: 다국어 (v2.73.0 UI 개편) ──
+    //  지구본 "다국어" 줄 삭제 / "선택 언어" → "번역 언어" / 선택 언어를 국기 박스로 나열(폭에 따라 줄지 않음) +
+    //  박스마다 오버레이 개별 토글 / 음성 메뉴 삭제 / 2개 이하 1줄·3개 이상 2열.
     private var multiColumn: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 5) {
-                Image(systemName: "globe").font(.caption)
-                Text("다국어").font(.caption.bold())
-            }
-            .foregroundStyle(.secondary)
-
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 10) {
+            // 줄1: 번역 언어 라벨 + 선택/변경 버튼
+            HStack(spacing: 8) {
+                Text("번역 언어").font(.headline).foregroundStyle(.secondary)
                 Button { showAudienceLangs = true } label: {
-                    Text(audienceLangs.isEmpty ? "청중 언어 선택" : "선택 언어: \(audienceTagList)")
-                        .font(.caption).lineLimit(1)
+                    HStack(spacing: 4) {
+                        Image(systemName: "slider.horizontal.3")
+                        Text(audienceLangs.isEmpty ? "선택" : "변경")
+                    }
+                    .font(.callout)
                 }
+                .buttonStyle(.bordered)
                 .disabled(isRunning || isMultiRunning)
             }
 
-            HStack(spacing: 6) {
+            // 줄2: 시작/정지 · 자막리셋 · 타이머
+            HStack(spacing: 8) {
                 Button {
                     if isMultiRunning { stopMulti() } else { startMulti() }
                 } label: {
@@ -415,21 +456,138 @@ struct ContentView: View {
                 .frame(width: 92)
                 .disabled(audienceLangs.isEmpty || isRunning)
 
-                // v2.37.0: 순서 변경 — 시작 · 오버레이 · 음성 · 자막리셋 · 카운터
-                overlayToggleButton(isOn: multiOverlay.isVisible, color: .blue, help: "다국어 오버레이") {
-                    if multiStore.langs.isEmpty { multiStore.setLanguages(audienceLangs) }
-                    multiOverlay.toggle(store: multiStore, glossary: glossary, pairEngine: pairEngine, mainWindow: NSApp.keyWindow)
-                }
-
-                multiAudioMenu
-
                 resetButton(disabled: multiStore.segments.isEmpty && multiStore.currentSource.isEmpty) {
                     multiStore.clear()
                 }
 
                 timerLabel(multiSessionStart)
             }
+
+            // 줄3+: 선택 언어 박스 (2개 이하 1줄, 3개 이상 2열). 폭에 따라 줄어들지 않음.
+            if audienceLangs.isEmpty {
+                Text("언어를 선택하세요").font(.callout).foregroundStyle(.secondary)
+            } else {
+                langBoxesGrid
+            }
         }
+    }
+
+    // v2.76.0: 언어 박스 1줄 가로 배열. 헤더 고정폭을 없앴으므로 박스 수만큼 자연스럽게 늘어남.
+    @ViewBuilder
+    private var langBoxesGrid: some View {
+        HStack(spacing: 8) {
+            ForEach(audienceLangs, id: \.self) { langOverlayBox($0) }
+        }
+    }
+
+    // v2.73.0: 박스에 표시할 언어명(네이티브 표기). 매핑에 없으면 langShort 폴백.
+    private func langName(_ code: String) -> String {
+        let map: [String: String] = [
+            "ko":"한국어", "en":"English", "ja":"日本語",
+            "zh-Hans":"简体中文", "zh-Hant":"繁體中文",
+            "fr":"Français", "de":"Deutsch", "es":"Español", "it":"Italiano",
+            "pt-BR":"Português", "pt-PT":"Português", "ru":"Русский",
+            "ar":"العربية", "hi":"हिन्दी", "th":"ไทย", "vi":"Tiếng Việt",
+            "id":"Indonesia", "ms":"Melayu", "tr":"Türkçe", "pl":"Polski",
+            "nl":"Nederlands", "sv":"Svenska", "uk":"Українська", "vi-VN":"Tiếng Việt"
+        ]
+        return map[code] ?? langShort(code)
+    }
+
+    // v2.74.0: 박스의 언어명을 탭하면 그 언어를 번역 언어에서 해제(토글 끄듯 박스 사라짐).
+    //  통역 중에는 변경 금지(시작 전에만). 그 언어 오버레이가 떠 있으면 함께 닫는다.
+    private func removeLang(_ code: String) {
+        guard !isRunning, !isMultiRunning else { return }
+        var langs = audienceLangs
+        langs.removeAll { $0 == code }
+        audienceLangs = langs
+        settings.saveAudienceLangs(langs)
+        multiStore.setLanguages(langs)
+        if overlayOnLangs.contains(code) {
+            multiOverlay.hideLang(code)
+            overlayOnLangs.remove(code)
+        }
+    }
+
+    // v2.74.0: 언어 1개 박스 [국기 언어명(탭=해제) | 오버레이토글(색으로 on/off)].
+    //  - 국기+언어명 탭: 번역 언어에서 해제(removeLang)
+    //  - 오버레이 버튼: 모양 고정("display"), 켜짐=초록/꺼짐=회색 색으로만 구별
+    @ViewBuilder
+    private func langOverlayBox(_ code: String) -> some View {
+        let isOn = overlayOnLangs.contains(code)
+        HStack(spacing: 8) {
+            // 국기 + 언어명 — 탭하면 번역 언어에서 해제
+            HStack(spacing: 8) {
+                Text(flagEmoji(code)).font(.system(size: 18))
+                Text(langName(code))
+                    .font(.body)
+                    .fixedSize()                 // 글자가 폭에 따라 줄거나 잘리지 않게
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { removeLang(code) }
+            .help("탭하면 번역 언어에서 제외")
+
+            // 오버레이 토글 — 모양은 고정, 켜짐=초록 / 꺼짐=회색 (색으로만 구별)
+            Button {
+                if multiStore.langs.isEmpty { multiStore.setLanguages(audienceLangs) }
+                multiOverlay.toggleLang(code, store: multiStore, glossary: glossary,
+                                        pairEngine: pairEngine, mainWindow: NSApp.keyWindow)
+                if multiOverlay.isVisible(lang: code) { overlayOnLangs.insert(code) }
+                else { overlayOnLangs.remove(code) }
+            } label: {
+                Image(systemName: "display")          // 모양 고정(변하지 않음)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(isOn ? .white : Color.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(isOn ? Color.green : Color.gray.opacity(0.16))
+                    )
+            }
+            .buttonStyle(.plain)
+            .help(langName(code) + " 오버레이 " + (isOn ? "켜짐" : "꺼짐"))
+        }
+        .fixedSize(horizontal: true, vertical: false)   // 박스 전체가 폭에 따라 압축되지 않게
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.gray.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.gray.opacity(0.25), lineWidth: 1)
+        )
+    }
+
+    // v2.72.0: 언어 코드(BCP-47) → 국기 이모지. 매핑에 없으면 🌐.
+    //  (영어는 미국기 기준. 다른 깃발을 원하면 아래 map에서 바꾸면 됨.)
+    private func flagEmoji(_ langCode: String) -> String {
+        let map: [String: String] = [
+            "ko":"KR", "en":"US", "ja":"JP", "zh-Hans":"CN", "zh-Hant":"TW",
+            "fr":"FR", "de":"DE", "es":"ES", "it":"IT", "pt-BR":"BR", "pt-PT":"PT",
+            "ru":"RU", "ar":"SA", "hi":"IN", "th":"TH", "vi":"VN", "id":"ID",
+            "ms":"MY", "tr":"TR", "pl":"PL", "nl":"NL", "sv":"SE", "da":"DK",
+            "no":"NO", "fi":"FI", "el":"GR", "cs":"CZ", "uk":"UA", "he":"IL",
+            "fa":"IR", "ro":"RO", "hu":"HU", "bg":"BG", "hr":"HR", "sk":"SK",
+            "sl":"SI", "sr":"RS", "fil":"PH", "bn":"BD", "ur":"PK", "sw":"KE",
+            "am":"ET", "my":"MM", "km":"KH", "lo":"LA", "ne":"NP", "si":"LK",
+            "ka":"GE", "hy":"AM", "az":"AZ", "kk":"KZ", "uz":"UZ", "mn":"MN",
+            "sq":"AL", "mk":"MK", "be":"BY", "et":"EE", "lv":"LV", "lt":"LT",
+            "is":"IS", "af":"ZA", "zu":"ZA", "ha":"NG", "rw":"RW", "su":"ID",
+            "jv":"ID", "sd":"PK", "ta":"IN", "te":"IN", "mr":"IN", "gu":"IN",
+            "kn":"IN", "ml":"IN", "pa":"IN", "ca":"ES", "eu":"ES", "gl":"ES"
+        ]
+        guard let country = map[langCode] else { return "🌐" }
+        let base: UInt32 = 0x1F1E6   // regional indicator 'A'
+        var s = ""
+        for scalar in country.unicodeScalars {
+            if let u = UnicodeScalar(base + (scalar.value - 65)) {
+                s.unicodeScalars.append(u)
+            }
+        }
+        return s.isEmpty ? "🌐" : s
     }
 
     // ── 맨 오른쪽: 전역 메뉴 ── (v2.25.0: 하단 입력 소스 줄로 이동, 제거됨)
@@ -537,8 +695,8 @@ struct ContentView: View {
     // ═══════════════ 콘솔 자막 ═══════════════
     @ViewBuilder
     private var subtitleScroll: some View {
-        // v2.64.0: 정지 후에도 다국어 자막 유지(세그먼트가 남아 있으면). 단일 실행 중이면 단일 우선.
-        if isMultiRunning || (!isRunning && !multiStore.segments.isEmpty) { multiSourceScroll } else { pairScroll }
+        // v2.69.0: [통합] 단일 모드 숨김에 따라 자막도 다국어로 일원화(pairScroll 분기 제거).
+        multiSourceScroll
     }
 
     // v2.61.0: 패널 폭 조절용 드래그 구분선
@@ -644,11 +802,16 @@ struct ContentView: View {
     private var multiSourceScroll: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
+                // v2.77.0: LazyVStack → VStack. 표시 줄이 15줄로 적은데 LazyVStack을 쓰면
+                //   자막 갱신마다 prefetch·배치 재계산·옛 배치 대량 해제(LazySubviewPlacements.updateValue,
+                //   updatePrefetchPhases, arrayDestroy)가 폭발해 메인 멈춤(무지개)을 유발. 적은 줄수엔 VStack이 안정적.
+                VStack(alignment: .leading, spacing: 10) {
                     // 확정된 세그먼트: 원문 + 각 언어 번역
-                    // v2.53.0: 최근 80개만 렌더(성능). 전체 기록은 전사문에 저장됨.
+                    // v2.75.0: 표시 줄 수 80→15. 화면 자막 줄이 많으면 입력 언어 전환·조작 순간
+                    //   SwiftUI 무효화(AG propagate_dirty/flushTransactions)가 폭발해 메인 멈춤(무지개)을
+                    //   유발 → 표시 줄 수 축소(전체 기록은 전사문에 저장됨).
                     // v2.66.0: 입력 언어가 바뀌는 지점에 가는 구분선(화자 전환을 시각적으로 표시).
-                    let recentSegs = Array(multiStore.segments.suffix(80))
+                    let recentSegs = Array(multiStore.segments.suffix(15))
                     ForEach(Array(recentSegs.enumerated()), id: \.element.id) { idx, seg in
                         if idx > 0 && detectLang(recentSegs[idx - 1].source) != detectLang(seg.source) {
                             Rectangle()
@@ -687,25 +850,28 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
             ForEach(multiStore.langs, id: \.self) { lang in
-                if let t = seg.targets[lang], !t.isEmpty {
-                    // v2.65.0: 입력 언어와 같은 칸은 원문 그대로(한영 교정이 거꾸로 걸리는 것 방지).
-                    let normalized = glossary.normalize(t)
-                    let displayed = isSourceLang(detectLang(seg.source), lang)
-                        ? normalized
-                        : pairEngine.apply(source: seg.source, target: normalized)
+                // v2.78.0: 입력=칸 언어면 그 칸에 원문(전사)을 항상 표시(번역 데이터가 없어도 라벨이 사라지지 않게).
+                //   입력≠칸 언어면 그 언어 번역을 표시. → 영어 입력 시 English 칸이 비어 사라지던 문제 해결.
+                //   (원문=타겟어인 칸은 전사, 다른 언어가 들어오면 그 칸이 번역으로 전환된다.)
+                let isSrc = isSourceLang(detectLang(seg.source), lang)
+                let raw = isSrc ? seg.source : (seg.targets[lang] ?? "")
+                if !raw.isEmpty {
+                    let normalized = glossary.normalize(raw)
+                    let displayed = isSrc ? normalized : pairEngine.apply(source: seg.source, target: normalized)
                     HStack(alignment: .top, spacing: 6) {
                         Text("\(langShort(lang)):")
                             .font(.system(size: CGFloat(targetFont) * 0.7, weight: .semibold))
                             .foregroundStyle(.blue.opacity(0.7))
                             .padding(.top, 2)
                         EditableSubtitleText(
-                            text: displayed,  // v2.65.0: 입력=칸 언어면 교정 스킵
+                            text: displayed,
                             fontSize: CGFloat(targetFont),
                             bold: false,
                             color: .primary,
                             isEditing: $isEditing,
                             onCommit: { newText in
-                                multiStore.updateTarget(id: seg.id, lang: lang, newText: newText)
+                                if isSrc { multiStore.updateSource(id: seg.id, newText: newText) }
+                                else { multiStore.updateTarget(id: seg.id, lang: lang, newText: newText) }
                                 relayMulti(lang)
                             }
                         )
@@ -1337,7 +1503,13 @@ struct ContentView: View {
 
         // v2.68.0: [통합] 화자 개념 제거 — 고른 언어가 곧 번역어(targets).
         //   입력 언어는 자동 감지(MultiSubtitleStore v1.7.0: 원문 문장부호로 끊음).
-        let targets = audienceLangs
+        // v2.70.0: 동시 세션 상한 4(과부하·다운 방지). 예전에 저장된 초과분은 앞 4개만 사용.
+        var targets = audienceLangs
+        if targets.count > 4 {
+            print("[BMG] 번역어 \(targets.count)개 → 4개로 제한(과부하 방지)")
+            targets = Array(targets.prefix(4))
+            audienceLangs = targets
+        }
 
         multiStore.setLanguages(targets)
         statusMessage = "다국어 연결 중..."
@@ -1347,6 +1519,13 @@ struct ContentView: View {
         }
         // v2.50.0: 문장이 확정될 때마다 Fish 언어가 청중 언어에 있으면 그 언어 번역을 Fish로 송출
         multiStore.onSegmentCommitted = { targets in
+            // v2.79.0: [반영 로그 다국어 지원] 다국어 모드에서도 문장 확정 시 반영 로그 수집.
+            //   원문 + 모든 언어 번역을 합쳐 검사(용어집 canonical은 한국어, source는 영어 등 어느 칸에서든 매칭).
+            let src = self.multiStore.segments.last?.source ?? ""
+            let tgt = targets.values.joined(separator: " ")
+            self.logReflections(source: src, target: tgt)
+
+            // Fish TTS 송출
             guard self.settings.fishEnabled, !self.settings.fishLang.isEmpty else { return }
             let fl = self.settings.fishLang
             if self.audienceLangs.contains(fl), let t = targets[fl], !t.isEmpty {
@@ -1421,6 +1600,7 @@ struct ContentView: View {
         relay.stopBroadcast()
         audioBroadcaster.stop()
         multiOverlay.hide()           // v2.42.0: 중지 시 다국어 오버레이 창도 닫기
+        overlayOnLangs.removeAll()    // v2.72.0: 헤더 언어 박스 토글 표시도 함께 끔
         stopAudioTimeout()            // v2.36.0
         multiSessionStart = nil
         statusMessage = "정지됨"
@@ -1435,7 +1615,7 @@ struct ContentView: View {
             // v2.51.0: 무음 판정 기준 500 → 50. 외부 오디오 인터페이스는 입력 레벨이 낮게
             //          들어와 발화 중에도 RMS가 500 미만인 경우가 많아 오작동하던 문제 수정.
             //          진짜 무음은 RMS 한 자리수~십 단위라 50이면 발화와 잘 구분됨.
-            if let rms = self.lastAudioRMS, rms < 50 {
+            if audio.lastRMS < 50 {   // v2.71.0: @State 대신 엔진의 lastRMS 직접 읽기
                 self.audioSilenceTime += 0.5
             } else {
                 self.audioSilenceTime = 0

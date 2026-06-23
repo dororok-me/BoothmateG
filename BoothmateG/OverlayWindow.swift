@@ -2,8 +2,21 @@
 //  OverlayWindow.swift
 //  BoothmateG
 //
-//  Version: 1.29.0
+//  Version: 1.34.0
 //  Changelog:
+//    1.34.0 - 진행 중 자막을 카라오케(KaraokeCurrentLine)로 연결. 그동안 카라오케 코드는 있었으나
+//             진행 자막이 일반 EditableSubtitleText로 그려져 새 단어가 툭 박혔음. 이제 인식되는 새 단어가
+//             왼쪽에서 페이드+슬라이드되며 부드럽게 등장(실시간 단어 표출 유지). 외곽선 색·번짐도 카라오케에 전달.
+//    1.33.0 - 테두리 굵기 단계(가늘게/보통/굵게) 제거 → 테두리는 on/off 토글만(켜지면 가늘게 1.0 고정). /
+//             하단 내부 여백이 자동 스크롤로 가려지던 문제 수정: 콘텐츠 끝 패딩 대신 자막 스크롤 영역
+//             자체를 innerMargin만큼 위로 올려 하단 여백이 항상 보이게.
+//    1.32.0 - 내부 여백을 좌·우·하단에만 적용(상단 제거). 하단을 고정값(bottomFixedMargin) 대신
+//             innerMargin으로 바꿔 내부 여백 슬라이더가 하단에도 반영되게.
+//    1.31.0 - [진짜 외곽선] 테두리가 글자를 멀리 떨어뜨려 복제(겹쳐 뭉개짐)하던 방식을 폐기하고,
+//             8방향으로 1~3px씩 번짐 없이 복제해 글자 윤곽에 딱 붙는 외곽선으로 변경. 굵기 3단계도 1/2/3로,
+//             기본값 2.0. 굵게 해도 글자가 겹치지 않음.
+//    1.30.0 - 테두리 굵기를 슬라이더 → 3단계 버튼(가늘게 2 / 보통 4 / 굵게 6)으로 단순화.
+//             기본값 1.0 → 4.0(보통). 통역 중 빠르게 선택하도록.
 //    1.29.0 - 글자 테두리(그림자) 세부 조절 추가: 테두리색·굵기·그림자 흐림(설정 패널, 테두리 켜짐 시).
 //             모든 창(OBS·일반·단일·다국어)에 동일 적용. StrokeModifier 확장.
 //    1.28.0 - 다국어 분리 창 겹침 방지: 처음 뜰 때 cascadeIndex만큼 계단식 배치(저장 위치 있으면 그대로).
@@ -462,7 +475,6 @@ struct OverlayContentView: View {
     @AppStorage("ov_textStroke")   private var textStroke: Bool = true
     // v1.29.0: 글자 테두리(그림자) 세부 설정 — 어떤 창에서도 조절 가능
     @AppStorage("ov_strokeColorHex") private var strokeColorHex: String = "#000000"  // 테두리 색
-    @AppStorage("ov_strokeWidth")    private var strokeWidth: Double = 1.0           // 굵기(번짐 크기)
     @AppStorage("ov_strokeBlur")     private var strokeBlur: Double = 3.0            // 그림자 흐림(부드러운 번짐)
     @AppStorage("ov_showSource")   private var showSource: Bool = false
     @AppStorage("ov_srcFontSize")  private var srcFontSize: Double = 18
@@ -511,30 +523,19 @@ struct OverlayContentView: View {
                                 //          바로 수정 가능(확정 자막과 동일). 더블클릭 순간 내부적으로 확정시켜
                                 //          이후 글자 늘어남이 수정창에 영향 없게 함.
                                 if !store.currentTarget.isEmpty {
-                                    EditableSubtitleText(
+                                    // v1.34.0: 진행 중 자막을 카라오케로 표출 — 인식되는 새 단어가 왼쪽에서
+                                    //   페이드+슬라이드되며 부드럽게 등장(실시간 단어 표출은 유지, "툭 박힘" 제거).
+                                    //   카라오케는 표시 전용이라 더블클릭 편집은 확정 자막에서만 동작.
+                                    KaraokeCurrentLine(
                                         text: (displayPolish ?? glossary.normalize)(store.currentTarget),
                                         fontSize: fontSize,
                                         bold: fontBold,
                                         color: Color(hex: fontColorHex),
-                                        wordSpacing: CGFloat(4 + wordSpacing),   // 확정 자막 단어 간격과 비슷하게
-                                        isEditing: $isCurrentEditing,
-                                        onCommit: { newText in
-                                            // 더블클릭 순간 확정해 둔 세그먼트에 수정 내용 반영
-                                            if let id = committedEditID {
-                                                store.updateTarget(id: id, newText: newText)
-                                            }
-                                            committedEditID = nil
-                                        },
-                                        onBeginEdit: {
-                                            // 더블클릭하는 순간 진행 중 자막을 확정 → 글자 늘어남 멈춤.
-                                            // 팝오버가 먼저 뜨도록 다음 런루프에서 확정(뷰 사라짐으로 인한 팝오버 닫힘 방지).
-                                            DispatchQueue.main.async {
-                                                committedEditID = store.commitCurrentForEditing()
-                                            }
-                                        }
+                                        stroke: textStroke,
+                                        strokeColorHex: strokeColorHex,
+                                        strokeBlur: strokeBlur,
+                                        lineSpacing: CGFloat(textLineSpacing)
                                     )
-                                    .modifier(StrokeModifier(enabled: textStroke, colorHex: strokeColorHex, width: strokeWidth, blur: strokeBlur))
-                                    .lineSpacing(textLineSpacing)
                                     .fixedSize(horizontal: false, vertical: true)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .padding(.horizontal, innerMargin)
@@ -542,8 +543,8 @@ struct OverlayContentView: View {
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.top, innerMargin)
-                            .padding(.bottom, OverlayContentView.bottomFixedMargin)
+                            // v1.33.0: 상단 여백 없음. 하단 여백은 콘텐츠 끝에 주면 자동 스크롤로 가려지므로,
+                            //   아래 ScrollView 바깥(.padding(.bottom, innerMargin))에서 스크롤 영역을 올려 처리.
                             .padding(.horizontal, 4)
                         }
                         .frame(width: geo.size.width, alignment: .leading)
@@ -572,6 +573,9 @@ struct OverlayContentView: View {
                     .onChange(of: store.currentTarget) { _, _ in
                         if !isCurrentEditing { proxy.scrollTo("ov_current", anchor: .bottom) }
                     }
+                    // v1.33.0: 하단 내부 여백 — 자막 스크롤 영역 전체를 innerMargin만큼 위로 올림.
+                    //   (콘텐츠 끝 패딩은 자동 스크롤로 가려지므로, 영역 자체를 줄여 항상 보이게 함.)
+                    .padding(.bottom, innerMargin)
                 }
             }
 
@@ -683,7 +687,7 @@ struct OverlayContentView: View {
                 Text(spacedAttr((displayPolish ?? glossary.normalize)(seg.targetText)))
                     .font(.system(size: fontSize, weight: fontBold ? .bold : .regular))
                     .foregroundColor(Color(hex: fontColorHex))
-                    .modifier(StrokeModifier(enabled: textStroke, colorHex: strokeColorHex, width: strokeWidth, blur: strokeBlur))
+                    .modifier(StrokeModifier(enabled: textStroke, colorHex: strokeColorHex, width: 1.0, blur: strokeBlur))
                     .lineSpacing(textLineSpacing)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -754,10 +758,7 @@ struct OverlayContentView: View {
             // v1.29.0: 테두리(그림자) 세부 조절 — 켜져 있을 때만 표시
             if textStroke {
                 sRow("테두리색") { hexPicker(OverlayContentView.fontColors, selected: strokeColorHex) { strokeColorHex = $0 } }
-                sRow("테두리 굵기") {
-                    Slider(value: $strokeWidth, in: 0.5...6, step: 0.5).frame(width: 120)
-                    Text(String(format: "%.1f", strokeWidth)).frame(width: 34).font(.caption)
-                }
+                // v1.33.0: 테두리 굵기 단계 제거 — 테두리는 on/off(가늘게 고정)만. 굵기 버튼 삭제.
                 sRow("그림자") {
                     Slider(value: $strokeBlur, in: 0...12, step: 0.5).frame(width: 120)
                     Text(String(format: "%.1f", strokeBlur)).frame(width: 34).font(.caption)
@@ -887,15 +888,21 @@ struct StrokeModifier: ViewModifier {
     func body(content: Content) -> some View {
         if enabled {
             let c = Color(hex: colorHex)
-            let w = CGFloat(width)
+            let w = CGFloat(width)        // 외곽선 두께(작게: 글자에 딱 붙음)
             let b = CGFloat(blur)
-            // 사방 그림자로 두께감(굵기)을 만들고, blur로 번짐의 부드러움을 조절.
+            // v1.31.0: [진짜 외곽선] 글자를 멀리 떨어뜨려 복제하던 방식(겹쳐 뭉개짐) 폐기.
+            //   8방향으로 w픽셀씩, 번짐 없이(radius 0) 복제 → 글자 윤곽에 딱 붙는 외곽선.
+            //   blur>0이면 그 위에 부드러운 그림자(글로우)를 한 겹만 추가(선택).
             content
-                .shadow(color: c.opacity(0.9), radius: b * 0.4, x:  w, y:  w)
-                .shadow(color: c.opacity(0.9), radius: b * 0.4, x: -w, y: -w)
-                .shadow(color: c.opacity(0.9), radius: b * 0.4, x:  w, y: -w)
-                .shadow(color: c.opacity(0.9), radius: b * 0.4, x: -w, y:  w)
-                .shadow(color: c.opacity(0.6), radius: b, x: 0, y: 0)
+                .shadow(color: c, radius: 0, x:  w, y:  0)
+                .shadow(color: c, radius: 0, x: -w, y:  0)
+                .shadow(color: c, radius: 0, x:  0, y:  w)
+                .shadow(color: c, radius: 0, x:  0, y: -w)
+                .shadow(color: c, radius: 0, x:  w, y:  w)
+                .shadow(color: c, radius: 0, x: -w, y: -w)
+                .shadow(color: c, radius: 0, x:  w, y: -w)
+                .shadow(color: c, radius: 0, x: -w, y:  w)
+                .shadow(color: c.opacity(b > 0 ? 0.55 : 0), radius: b, x: 0, y: 0)
         } else {
             content
         }
@@ -927,6 +934,8 @@ struct KaraokeCurrentLine: View {
     let bold: Bool
     let color: Color
     let stroke: Bool
+    var strokeColorHex: String = "#000000"   // v1.34.0: 확정 자막과 외곽선 색 일치
+    var strokeBlur: Double = 3.0             // v1.34.0: 외곽선 번짐(그림자)
     var lineSpacing: CGFloat = 0
 
     private var words: [String] {
@@ -940,7 +949,7 @@ struct KaraokeCurrentLine: View {
                 Text(word + " ")
                     .font(.system(size: fontSize, weight: bold ? .bold : .regular))
                     .foregroundColor(color)
-                    .modifier(StrokeModifier(enabled: stroke))
+                    .modifier(StrokeModifier(enabled: stroke, colorHex: strokeColorHex, width: 1.0, blur: strokeBlur))
                     .transition(.asymmetric(
                         insertion: .opacity.combined(with: .offset(x: -fontSize * 0.5)),
                         removal: .opacity))

@@ -2,7 +2,7 @@
 //  GlossaryEngine.swift
 //  BoothmateG
 //
-//  Version: 1.4.0
+//  Version: 1.5.0
 //  Changelog:
 //    1.0.0 - 최초 작성. 번역 텍스트에 용어집 항목을 치환
 //    1.1.0 - normalize() 추가: 콤마 별칭 + 양방향. 각 칸 첫 단어를 대표 표기로 통일
@@ -14,6 +14,10 @@
 //            한국어 별칭은 조사 결합 특성상 기존 단순 치환 유지.
 //    1.4.0 - 행사 정보 기능 추가: EventInfo, Speaker 구조체 + 유사도 매칭(Levenshtein) +
 //            번역 후처리 함수 applyEventInfo(). systemInstruction 생성 함수 추가.
+//    1.5.0 - [무지개 멈춤/다운 해결] 다국어 동시 세션이 같은 GlossaryEngine 인스턴스를
+//            동시에 호출하면 items 안의 String 버퍼를 여러 스레드가 동시 복사하다
+//            충돌(데이터 레이스, TSan 확정). items를 건드리는 update/apply/normalize에
+//            NSLock을 걸어 한 번에 한 스레드만 들어가게 직렬화. 기존 로직은 그대로.
 //
 
 import Foundation
@@ -23,14 +27,18 @@ import Foundation
 final class GlossaryEngine {
 
     private var items: [GlossaryItem] = []
+    // v1.5.0: 여러 세션이 동시에 호출하면 items의 String 버퍼를 동시 복사하다 충돌 → 한 번에 한 스레드만.
+    private let lock = NSLock()
 
     // 용어집 항목 갱신
     func update(items: [GlossaryItem]) {
+        lock.lock(); defer { lock.unlock() }   // v1.5.0
         self.items = items.sorted { $0.source.count > $1.source.count }
     }
 
     // (구버전) 단순 치환 — 호환용으로 남겨둠. 현재 표시 경로는 normalize() 사용.
     func apply(to text: String) -> String {
+        lock.lock(); defer { lock.unlock() }   // v1.5.0
         var result = text
         for item in items {
             guard !item.source.isEmpty, !item.target.isEmpty else { continue }
@@ -43,6 +51,7 @@ final class GlossaryEngine {
     // 각 칸은 콤마 별칭 목록, 각 칸 "첫 단어"가 대표 표기.
     // 번역문에 어느 칸의 별칭이 나오든 → 그 칸의 대표 표기로 통일.
     func normalize(_ text: String) -> String {
+        lock.lock(); defer { lock.unlock() }   // v1.5.0
         var result = text
 
         // (별칭, 대표표기) 쌍 모으기

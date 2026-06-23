@@ -2,8 +2,12 @@
 //  MultiSubtitleStore.swift
 //  BoothmateG
 //
-//  Version: 1.7.0
+//  Version: 1.8.0
 //  Changelog:
+//    1.8.0 - [문장 단위 확정] finalizeTurn이 turn 종료 시 무조건 확정하던 것을 폐지.
+//            원문이 문장부호로 끝날 때만 확정(flushIfKoreanSentenceEnded)하고 미완성 문장은 다음 turn과
+//            이어붙인다. → 세그먼트=완전한 문장. 오버레이가 turn 중간("매각하면,")에서 끊기던 문제 해결.
+//            (미완성이 240자 넘게 길어지면 안전장치로 강제 확정.) 메인 콘솔 원문-번역 짝은 그대로 유지.
 //    1.7.0 - [통합] 문장 확정 기준을 한국어 → 입력 원문(currentSource)으로 변경.
 //            양방향에서 입력 언어가 바뀌어도 원문 문장부호로 끊는다.
 //            (sourceIsKorean 분기 폐기 — 값은 남으나 미사용)
@@ -56,11 +60,16 @@ final class MultiSubtitleStore: ObservableObject {
     }
 
     func finalizeTurn() {
-        guard !currentSource.isEmpty || !currentTargets.isEmpty else { return }
-        segments.append(MultiSegment(source: currentSource, targets: currentTargets))
-        currentSource = ""
-        currentTargets = [:]
-        if segments.count > 200 { segments.removeFirst(segments.count - 200) }
+        // v1.8.0: [문장 단위 확정] turn이 끝났다고 무조건 확정하던 것을 폐지.
+        //   원문(currentSource)이 문장부호(. ! ? 。！？)로 끝날 때만 확정하고(flushIfKoreanSentenceEnded),
+        //   문장이 미완성이면 확정하지 않고 다음 turn과 이어붙인다.
+        //   → 세그먼트가 항상 완전한 문장이 되어, turn 중간(예: "매각하면,")에서 줄이 끊기던 문제 해결.
+        //   (메인 콘솔의 원문-번역 짝은 그대로 유지되고, 오버레이는 문장 단위로 깔끔해짐)
+        flushIfKoreanSentenceEnded()
+        // 안전장치: 문장부호가 한참 안 와서 미완성이 비정상적으로 길어지면(STT가 마침표 누락 등) 강제 확정.
+        if currentSource.trimmingCharacters(in: .whitespacesAndNewlines).count > 240 {
+            flushSentence()
+        }
     }
 
     func clear() {

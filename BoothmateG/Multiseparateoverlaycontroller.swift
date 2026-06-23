@@ -2,8 +2,18 @@
 //  MultiSeparateOverlayController.swift
 //  BoothmateG
 //
-//  Version: 1.2.0
+//  Version: 1.5.0
 //  Changelog:
+//    1.5.0 - [한 줄기 흐름 + 마침표 확정] 오버레이가 메인 콘솔의 끊김을 무시하고, 확정+진행 번역을 모두
+//            이어붙여 한 줄기로 만든 뒤 마침표로 끝난 문장만 확정 줄(위 고정), 미완성 꼬리는 진행 줄로 보낸다.
+//            확정 줄이 재배치되던 현상("3대의"가 떴다 합쳐짐) 제거. 확정 문장 목록이 바뀔 때만 교체(깜빡임 방지).
+//    1.4.0 - [오버레이만 문장 단위] syncLang에서 그 언어 번역들을 모두 이어붙여 문장부호(. ! ?) 기준으로
+//            다시 끊어 오버레이 store에 넣는다. 메인 콘솔(MultiSubtitleStore)은 turn 단위 그대로 두어
+//            원문 대조를 유지하고, 오버레이(청중 화면)만 문장 단위로 표출 → 둘을 진짜로 분리.
+//            (splitIntoSentences 추가, 숫자 소수점은 끊지 않음)
+//    1.3.0 - 언어별 개별 토글 지원: isVisible(lang:)/toggleLang/showLang/hideLang 추가.
+//            상단 헤더에서 언어 박스마다 오버레이를 따로 켜고 끌 수 있게 함(기존 전체 toggle은 유지).
+//            관찰(observeMultiStore)은 처음 한 창이 열릴 때 1회 설정, 모든 창이 닫히면 해제.
 //    1.2.0 - 메인 콘솔과 동일한 용어집 음역 교정을 오버레이에도 적용(청중 자막 = 메인 콘솔 일치).
 //            syncLang에서 pairEngine.apply 적용 + 입력=칸 언어면 스킵(detectLang/isSourceLang).
 //            show/toggle에 pairEngine 인자 추가.
@@ -69,6 +79,45 @@ final class MultiSeparateOverlayController {
         cancellables.removeAll()
     }
 
+    // ── v1.3.0: 언어별 개별 제어 ─────────────────────────────
+    // 특정 언어 창이 떠 있는지
+    func isVisible(lang: String) -> Bool {
+        controllers[lang]?.isVisible ?? false
+    }
+
+    // 특정 언어 창만 켜고 끄기
+    func toggleLang(_ lang: String, store: MultiSubtitleStore, glossary: GlossaryEngine, pairEngine: GlossaryPairEngine, mainWindow: NSWindow?) {
+        if isVisible(lang: lang) { hideLang(lang) }
+        else { showLang(lang, store: store, glossary: glossary, pairEngine: pairEngine, mainWindow: mainWindow) }
+    }
+
+    // 특정 언어 창만 표시
+    func showLang(_ lang: String, store: MultiSubtitleStore, glossary: GlossaryEngine, pairEngine: GlossaryPairEngine, mainWindow: NSWindow?) {
+        guard store.langs.contains(lang) else { return }
+        self.multiStore = store
+        self.glossary = glossary
+        self.pairEngine = pairEngine
+        self.mainWindow = mainWindow
+
+        let isNew = (controllers[lang] == nil)
+        let ctrl = controllers[lang] ?? OverlayWindowController(langKey: lang)
+        if isNew { ctrl.cascadeIndex = store.langs.firstIndex(of: lang) ?? 0 }
+        controllers[lang] = ctrl
+        let st = stores[lang] ?? SubtitleStore()
+        stores[lang] = st
+        syncLang(lang)
+        ctrl.show(store: st, glossary: glossary, mainWindow: mainWindow, displayPolish: nil)
+
+        // 관찰이 아직 없으면(첫 창) 1회 설정
+        if cancellables.isEmpty { observeMultiStore(store) }
+    }
+
+    // 특정 언어 창만 숨김. 모든 창이 닫히면 관찰 해제.
+    func hideLang(_ lang: String) {
+        controllers[lang]?.hide()
+        if !isVisible { cancellables.removeAll() }
+    }
+
     // ── multiStore 관찰 → 언어별 동기화 ──
     private func observeMultiStore(_ store: MultiSubtitleStore) {
         cancellables.removeAll()
@@ -101,31 +150,70 @@ final class MultiSeparateOverlayController {
     }
 
     // 특정 언어의 SubtitleStore를 multiStore 내용으로 채운다.
-    //  - 확정 segments: 각 MultiSegment에서 (원문, 그 언어 번역)을 꺼내 SubtitleSegment로
-    //  - 진행 중: currentSource / currentTargets[lang]
+    //  v1.5.0: [한 줄기 흐름 + 마침표 확정] 메인 콘솔이 어디서 끊든 무시하고, 그 언어의 확정 번역 전체와
+    //    진행 중 번역을 모두 이어붙여 하나의 줄기로 만든 뒤 — 마침표(. ! ?)로 끝난 문장들만 확정 줄(위에 고정),
+    //    아직 마침표가 안 온 마지막 부분은 진행 줄(맨 아래, 실시간으로 흐르다 마침표 오면 위로 확정)로 보낸다.
+    //    → 확정 줄은 절대 재배치되지 않고("3대의"가 떴다 합쳐지는 현상 제거), 메인 콘솔은 그대로(분리 유지).
     private func syncLang(_ lang: String) {
         guard let ms = multiStore, let st = stores[lang] else { return }
         let g = glossary
 
-        // 확정 세그먼트 재구성 (그 언어 번역이 있는 것만)
-        var segs: [SubtitleSegment] = []
+        // 1) 확정 번역 전체 + 진행 중 번역을 한 줄기로 이어붙임 (용어집 교정 적용)
+        var joined = ""
         for seg in ms.segments {
             let tgt = seg.targets[lang] ?? ""
-            // 원문 또는 번역 중 하나라도 있으면 표시
-            guard !seg.source.isEmpty || !tgt.isEmpty else { continue }
+            guard !tgt.isEmpty else { continue }
             var normTgt = g?.normalize(tgt) ?? tgt
             // v1.2.0: 메인 콘솔과 동일한 용어집 음역 교정. 입력=칸 언어면 스킵(원문 보존).
             if let pe = pairEngine, !isSourceLang(detectLang(seg.source), lang) {
                 normTgt = pe.apply(source: seg.source, target: normTgt)
             }
-            segs.append(SubtitleSegment(sourceText: seg.source, targetText: normTgt))
+            let piece = normTgt.trimmingCharacters(in: .whitespaces)
+            guard !piece.isEmpty else { continue }
+            joined += (joined.isEmpty ? "" : " ") + piece
         }
-        st.segments = segs
+        // 진행 중(아직 말하는 중) 번역도 같은 줄기에 이어붙임
+        let rawLive = ms.currentTargets[lang] ?? ""
+        let liveTgt = (g?.normalize(rawLive) ?? rawLive).trimmingCharacters(in: .whitespaces)
+        if !liveTgt.isEmpty {
+            joined += (joined.isEmpty ? "" : " ") + liveTgt
+        }
 
-        // 진행 중 자막
+        // 2) 마침표 기준으로 분리: 완성된 문장들 + 마지막 미완성 꼬리
+        let (sentences, tail) = Self.splitSentencesAndTail(joined)
+
+        // 3) 완성된 문장 = 확정 줄(위에 고정). 내용이 바뀔 때만 교체 → 진행 줄만 자랄 땐 재렌더/깜빡임 없음.
+        if st.segments.map({ $0.targetText }) != sentences {
+            st.segments = sentences.map { SubtitleSegment(sourceText: "", targetText: $0) }
+        }
+        // 4) 미완성 꼬리 = 진행 줄(맨 아래에서 실시간으로 흐르다, 마침표 오면 위로 확정)
         st.currentSource = ms.currentSource
-        let liveTgt = ms.currentTargets[lang] ?? ""
-        st.currentTarget = g?.normalize(liveTgt) ?? liveTgt
+        st.currentTarget = tail
+    }
+
+    // v1.5.0: 문장 종결부호(. ! ? 。！？)로 텍스트를 (완성된 문장들, 마지막 미완성 꼬리)로 나눈다.
+    //   숫자 사이의 마침표(예: 9.5)는 소수점으로 보고 끊지 않는다.
+    private static func splitSentencesAndTail(_ text: String) -> ([String], String) {
+        let enders: Set<Character> = [".", "!", "?", "。", "！", "？"]
+        let chars = Array(text)
+        var sentences: [String] = []
+        var cur = ""
+        for i in 0..<chars.count {
+            let ch = chars[i]
+            cur.append(ch)
+            if enders.contains(ch) {
+                if ch == "." {
+                    let prev = i > 0 ? chars[i - 1] : " "
+                    let next = i + 1 < chars.count ? chars[i + 1] : " "
+                    if prev.isNumber && next.isNumber { continue }   // 9.5 같은 소수점
+                }
+                let t = cur.trimmingCharacters(in: .whitespaces)
+                if !t.isEmpty { sentences.append(t) }
+                cur = ""
+            }
+        }
+        let tail = cur.trimmingCharacters(in: .whitespaces)   // 마침표로 안 끝난 미완성 부분
+        return (sentences, tail)
     }
 
     // v1.2.0: 입력 텍스트 주 언어 추정(메인 콘솔 detectLang과 동일 규칙). 입력=칸이면 교정 스킵용.
