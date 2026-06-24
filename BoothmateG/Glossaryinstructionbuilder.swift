@@ -2,8 +2,11 @@
 //  GlossaryInstructionBuilder.swift
 //  BoothmateG
 //
-//  Version: 2.3.0
+//  Version: 2.4.0
 //  Changelog:
+//    2.4.0 - [용어집 강제력 강화] AI가 등록 용어를 무시하고 더 자연스러운 의역(예: mutability→가소성)으로
+//            번역하는 문제 대응. 용어집 섹션을 "ABSOLUTE HIGHEST PRIORITY"로 격상하고, "네 판단보다
+//            절대 우선·더 나아 보여도 바꾸지 말 것·임의 의역은 ERROR" 문구를 명시. General rules에도 재강조.
 //    2.3.0 - 용어집 섹션에 유사어(sourceAliases) 안내 추가. 각 용어 줄에 "may be misheard as ..."로
 //            오인식 표기를 함께 제시 → AI가 STT 오인식(예: 천궁2호→전군2호)을 듣고도 올바른 용어로
 //            번역. 후처리(GlossaryPairEngine)와 함께 2중 보강.
@@ -64,8 +67,11 @@ enum GlossaryInstructionBuilder {
                 return line
             }.joined(separator: "\n")
             sections.append("""
-            GLOSSARY — You MUST use these exact term translations in BOTH directions, in every context:
+            GLOSSARY — ABSOLUTE HIGHEST PRIORITY. These term translations OVERRIDE your own judgment:
             \(termLines)
+            - You MUST use these exact paired translations in BOTH directions, in every context — no exceptions.
+            - This glossary takes ABSOLUTE precedence over your own preferences. Even if another translation feels more natural, more common, or more fluent, you MUST still use the glossary term. DO NOT substitute your own wording.
+            - These are fixed technical terms / proper nouns chosen on purpose. Translating them differently is an ERROR, even if your version seems better.
             - When the source contains a listed term, the translation MUST use its paired term exactly.
             - If the source sounds like one of the "misheard as" variants, interpret it as the intended term and translate accordingly.
             - Apply even if the sentence is short, incomplete, or grammatically imperfect.
@@ -98,6 +104,7 @@ enum GlossaryInstructionBuilder {
         General rules:
         - Translate the ENTIRE sentence fully into the target language. Never leave source-language words untranslated.
         - Keep the interpretation natural and concise.
+        - If a GLOSSARY is given above, it is non-negotiable: glossary terms always win over any alternative wording you might prefer.
         """
     }
 }

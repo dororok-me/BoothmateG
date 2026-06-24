@@ -2,8 +2,10 @@
 //  ReflectionLog.swift
 //  BoothmateG
 //
-//  Version: 1.0.1
+//  Version: 1.1.0
 //  Changelog:
+//    1.1.0 - correction(후처리, 청록) 카테고리 추가: 후처리 엔진이 AI 의역을 용어집 표준표기로
+//            강제 교체했을 때 그 내역(예: "가소성 → 침묵성")을 로그에 남김.
 //    1.0.1 - Combine import 추가(@Published 사용에 필요한 모듈 누락 빌드 오류 수정).
 //    1.0.0 - 메인 콘솔 우측 "반영 로그" 패널용 데이터 모델·저장소.
 //            문장이 확정될 때마다 어떤 용어집·생략어·행사·연사 정보가 반영되었는지 기록한다.
@@ -22,6 +24,7 @@ enum ReflectionKind: String {
     case omission    // 생략어(필러) 제거 — 주황
     case event       // 행사 정보 반영 추정 — 초록
     case speaker     // 연사 정보 반영 추정 — 보라
+    case correction  // 후처리 교정(AI 의역을 용어집 표준표기로 강제 교체) — 청록
 
     var color: Color {
         switch self {
@@ -29,6 +32,7 @@ enum ReflectionKind: String {
         case .omission: return Color.orange
         case .event:    return Color.green
         case .speaker:  return Color.purple
+        case .correction: return Color.teal
         }
     }
 
@@ -38,6 +42,7 @@ enum ReflectionKind: String {
         case .omission: return "생략"
         case .event:    return "행사"
         case .speaker:  return "연사"
+        case .correction: return "후처리"
         }
     }
 }

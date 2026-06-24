@@ -2,8 +2,18 @@
 //  ContentView.swift
 //  BoothmateG
 //
-//  Version: 2.79.0
+//  Version: 2.83.0
 //  Changelog:
+//    2.83.0 - 용어집 '이 방식 사용' 토글 제거 → 용어집·통역 지침·블랙리스트를 항상 적용(단일·다국어 공통).
+//    2.82.0 - [후처리 카테고리 추가] 반영 로그에 "후처리"(청록) 카테고리 신설. 후처리 엔진(GlossaryPairEngine)이
+//             AI 의역을 용어집 표준표기로 강제 교체하면 그 내역(예: "가소성 → 침묵성")을 로그에 남김.
+//             그동안 후처리 교체는 AI 번역 이후에 일어나 용어집 매칭(화살표)에 안 잡히던 것을 명시적으로 표시.
+//    2.81.0 - [영한 반영 로그 안 뜸 수정] 용어집·행사·연사 매칭을 번역문(target)만 검사 → 원문+번역문 합쳐 검사.
+//             영한 통역 시 한국어 번역의 음역이 등록값과 달라 매칭 실패하던 문제 해결.
+//             (영어 원문에는 등록한 영어 이름·직책이 그대로 있으므로 원문도 함께 검사. 생략어는 원문 검사 유지.)
+//    2.80.0 - [호스트 로그인 창 안 뜸 수정] showHostLogin용 .sheet 연결이 누락돼 있어, 로그인 버튼을 눌러도
+//             창이 안 떴음(키체인에 자격증명이 저장된 기존 맥은 자동 로그인이라 드러나지 않던 버그).
+//             .sheet(isPresented: $showHostLogin) { HostLoginView() } 추가 → 새 기기/타인 맥에서 호스트 로그인 가능.
 //    2.79.0 - [반영 로그 다국어 지원] 그동안 logReflections가 단일 모드(subtitles)에서만 호출돼
 //             다국어 통역 시 반영 로그가 항상 비어 있었음. multiStore.onSegmentCommitted(문장 확정 콜백)에서도
 //             원문+모든 언어 번역을 합쳐 logReflections를 호출하도록 추가.
@@ -297,6 +307,12 @@ struct ContentView: View {
         .sheet(isPresented: $showBroadcastQR) {
             BroadcastQRView(sessionId: broadcastSessionId)
 
+        }
+        // v2.80.0: 호스트 로그인 시트 연결 누락 수정. showHostLogin이 true가 돼도 이 .sheet가 없어
+        //   로그인 창이 안 떴음(키체인에 자격증명이 있던 기존 맥은 자동 로그인이라 드러나지 않던 버그).
+        //   새 기기/타인 맥 배포 시 호스트 로그인이 가능해짐.
+        .sheet(isPresented: $showHostLogin) {
+            HostLoginView()
         }
     }
 
@@ -1258,6 +1274,10 @@ struct ContentView: View {
     private func logReflections(source: String, target: String) {
         guard reflogShow else { return }   // 패널 꺼져 있으면 수집 안 함
         var found: [(ReflectionKind, String)] = []
+        // v2.81.0: 용어집·행사·연사는 원문+번역문 양쪽에서 검사.
+        //   영한일 때 한국어 번역의 음역이 등록값과 달라 매칭 실패하던 문제 해결
+        //   (영어 원문에는 등록한 영어 이름·직책이 그대로 들어 있으므로 원문도 함께 검사).
+        let haystack = source + " " + target
 
         // ── 용어집(새 방식) ──
         for pair in settings.loadGlossaryPairs() {
@@ -1265,10 +1285,10 @@ struct ContentView: View {
             let src = pair.source.trimmingCharacters(in: .whitespaces)
             guard !canon.isEmpty || !src.isEmpty else { continue }
             // 번역문에 canonical 또는 source가 나타나면 반영된 것으로 추정
-            if !canon.isEmpty, target.localizedCaseInsensitiveContains(canon) {
+            if !canon.isEmpty, haystack.localizedCaseInsensitiveContains(canon) {
                 let arrow = src.isEmpty ? canon : "\(src) → \(canon)"
                 found.append((.glossary, arrow))
-            } else if !src.isEmpty, target.localizedCaseInsensitiveContains(src) {
+            } else if !src.isEmpty, haystack.localizedCaseInsensitiveContains(src) {
                 found.append((.glossary, src))
             }
         }
@@ -1292,7 +1312,7 @@ struct ContentView: View {
         for name in [ev.eventName.ko, ev.eventName.en, ev.venue.ko, ev.venue.en] {
             let n = name.trimmingCharacters(in: .whitespaces)
             guard n.count >= 2 else { continue }
-            if target.localizedCaseInsensitiveContains(n) {
+            if haystack.localizedCaseInsensitiveContains(n) {
                 found.append((.event, n))
             }
         }
@@ -1302,10 +1322,18 @@ struct ContentView: View {
             for name in [sp.name.ko, sp.name.en, sp.position.ko, sp.position.en] {
                 let n = name.trimmingCharacters(in: .whitespaces)
                 guard n.count >= 2 else { continue }
-                if target.localizedCaseInsensitiveContains(n) {
+                if haystack.localizedCaseInsensitiveContains(n) {
                     found.append((.speaker, n))
                 }
             }
+        }
+
+        // ── 후처리 교정 (AI 의역 → 용어집 표준표기로 강제 교체된 내역) ──
+        // v2.82.0: pairEngine 후처리를 적용해 실제 교체가 일어났으면 그 내역을 "후처리"로 기록.
+        //   예: AI가 mutability를 "가소성"으로 의역 → 후처리가 "침묵성"으로 교체 → "가소성 → 침묵성" 표시.
+        _ = pairEngine.apply(source: source, target: target)
+        for c in pairEngine.lastCorrections {
+            found.append((.correction, "\(c.from) → \(c.to)"))
         }
 
         if !found.isEmpty { reflectionLog.addMany(found) }
@@ -1435,13 +1463,13 @@ struct ContentView: View {
         audio.onAudioData = { [client] d in client.sendAudio(d) }
 
         // 용어집(새 방식) → systemInstruction 변환. '이 방식 사용' ON이고 등록 용어가 있으면 주입.
-        let glossaryInstruction: String = settings.useGlossaryPairMode
-            ? GlossaryInstructionBuilder.build(pairs: settings.loadGlossaryPairs(),
-                                               guide: settings.interpretGuide,
-                                               blacklist: settings.blacklistWords)
-            : ""
-        // v2.62.0: 코드 후처리 엔진에도 같은 용어집 주입(토글 ON일 때만). AI가 놓친 음역을 교정.
-        pairEngine.update(pairs: settings.useGlossaryPairMode ? settings.loadGlossaryPairs() : [])
+        // v2.83.0: '이 방식 사용' 토글 제거 → 용어집·지침·블랙리스트 항상 적용.
+        let glossaryInstruction: String = GlossaryInstructionBuilder.build(
+            pairs: settings.loadGlossaryPairs(),
+            guide: settings.interpretGuide,
+            blacklist: settings.blacklistWords)
+        // 코드 후처리 엔진에도 같은 용어집 주입. AI가 놓친 음역을 교정.
+        pairEngine.update(pairs: settings.loadGlossaryPairs())
         client.connect(apiKey: settings.geminiApiKey, langA: settings.targetLang, langB: settings.sourceLang, glossaryInstruction: glossaryInstruction, eventInfo: eventInfo)
 
         do {
@@ -1551,13 +1579,13 @@ struct ContentView: View {
         audio.onAudioData = { [multiClient] d in multiClient.sendAudio(d) }
 
         // 용어집(새 방식) → systemInstruction. 다국어도 동일 주입(영↔한 쌍 기반, AI가 타 언어에도 참고).
-        let multiGlossary: String = settings.useGlossaryPairMode
-            ? GlossaryInstructionBuilder.build(pairs: settings.loadGlossaryPairs(),
-                                               guide: settings.interpretGuide,
-                                               blacklist: settings.blacklistWords)
-            : ""
-        // v2.64.0: 다국어도 단일과 동일하게 용어집 후처리 엔진 로드(각 언어 칸에 apply 적용 위함).
-        pairEngine.update(pairs: settings.useGlossaryPairMode ? settings.loadGlossaryPairs() : [])
+        // v2.83.0: '이 방식 사용' 토글 제거 → 항상 적용.
+        let multiGlossary: String = GlossaryInstructionBuilder.build(
+            pairs: settings.loadGlossaryPairs(),
+            guide: settings.interpretGuide,
+            blacklist: settings.blacklistWords)
+        // 다국어도 단일과 동일하게 용어집 후처리 엔진 로드(각 언어 칸에 apply 적용 위함).
+        pairEngine.update(pairs: settings.loadGlossaryPairs())
         multiClient.connect(apiKey: settings.geminiApiKey, sourceLang: settings.multiSourceLang, targets: targets, glossaryInstruction: multiGlossary, eventInfo: eventInfo)
 
         do {

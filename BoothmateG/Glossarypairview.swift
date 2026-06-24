@@ -2,8 +2,10 @@
 //  GlossaryPairView.swift
 //  BoothmateG
 //
-//  Version: 2.4.1
+//  Version: 2.5.0
 //  Changelog:
+//    2.5.0 - '이 방식 사용' 토글 제거(항상 적용). 용어 추가를 맨 위(insert at 0)로. 용어집 검색창 추가
+//            (영어·한국어·유사어 부분 일치 필터, 결과 개수·없음 안내 표시).
 //    2.4.1 - 유사어란 안내/placeholder에 영어 별칭(음차 오인식) 등록 가능 명시.
 //    2.4.0 - 각 용어 카드에 유사어(sourceAliases) 입력란 추가. 음성인식이 고유명사를 잘못 들어도
 //            (예: 천궁2호→전군2호) 별칭이 잡히면 용어 발동. 콤마 구분 입력 → 카드별 저장/로드.
@@ -72,6 +74,8 @@ struct GlossaryPairView: View {
     @State private var showSavedToast = false
     // 탭 선택 (0=용어집, 1=통역 지침, 2=블랙리스트)
     @State private var selectedTab = 0
+    // 용어집 검색어 (source/canonical/유사어에서 부분 일치)
+    @State private var glossarySearch = ""
 
     // 현재 편집 내용을 비교용 문자열로 (용어집 + 통역 지침 + 블랙리스트)
     private var currentSnapshot: String {
@@ -93,9 +97,6 @@ struct GlossaryPairView: View {
             HStack {
                 Text("용어집 · 통역 설정").font(.title2).bold()
                 Spacer()
-                Toggle("이 방식 사용", isOn: $settings.useGlossaryPairMode)
-                    .toggleStyle(.switch)
-                    .help("켜면 용어집·통역 지침·블랙리스트가 통역에 적용됩니다.")
                 // 우상단 닫기(X)
                 Button {
                     dismiss()
@@ -192,17 +193,40 @@ struct GlossaryPairView: View {
                 Spacer()
                 Button {
                     let d = Draft()
-                    drafts.append(d)
+                    drafts.insert(d, at: 0)   // 맨 위에 추가
                     focusedField = d.id
+                    glossarySearch = ""        // 검색 중이면 새 카드가 보이도록 초기화
                 } label: {
                     Label("용어 추가", systemImage: "plus").font(.body)
+                }
+            }
+
+            // 검색창
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("용어 검색 (영어·한국어·유사어)", text: $glossarySearch)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.body)
+                if !glossarySearch.isEmpty {
+                    Button {
+                        glossarySearch = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    Text("\(filteredDraftCount)개")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
 
             ScrollView {
                 VStack(spacing: 8) {
                     ForEach($drafts) { $d in
-                        card($d)
+                        if draftMatchesSearch(d) {
+                            card($d)
+                        }
                     }
                 }
                 .padding(.vertical, 2)
@@ -214,8 +238,28 @@ struct GlossaryPairView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 8)
+            } else if !glossarySearch.isEmpty && filteredDraftCount == 0 {
+                Text("‘\(glossarySearch)’에 해당하는 용어가 없습니다.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 8)
             }
         }
+    }
+
+    // 검색어와 일치하는지 (영어/한국어/유사어 부분 일치, 대소문자 무시)
+    private func draftMatchesSearch(_ d: Draft) -> Bool {
+        let q = glossarySearch.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return true }
+        return d.source.localizedCaseInsensitiveContains(q)
+            || d.canonical.localizedCaseInsensitiveContains(q)
+            || d.aliasText.localizedCaseInsensitiveContains(q)
+    }
+
+    // 검색 결과 개수
+    private var filteredDraftCount: Int {
+        drafts.filter { draftMatchesSearch($0) }.count
     }
 
     // ── 탭 2: 통역 지침 ──

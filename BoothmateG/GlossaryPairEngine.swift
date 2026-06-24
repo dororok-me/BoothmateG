@@ -2,8 +2,14 @@
 //  GlossaryPairEngine.swift
 //  BoothmateG
 //
-//  Version: 1.9.0
+//  Version: 2.1.0
 //  Changelog:
+//    2.1.0 - 후처리 교체 내역을 통역 방향에 맞춰 기록. (trigger=방아쇠어 → to=표준표기)
+//            영한이면 "mutability → 침묵성", 한영이면 "침묵성 → mutability"로 표시되고,
+//            같은 용어의 여러 교체(가소성/영어잔재 등)는 한 줄(용어쌍 방향)로 통일됨.
+//    2.0.0 - 교체 내역 노출: 후처리가 실제 바꾼 (원표현→표준표기) 목록을 lastCorrections로 기록하고
+//            캐시에도 함께 저장. 반영 로그의 "후처리" 카테고리 표시에 사용(예: 가소성→침묵성).
+//            applySubstitutions가 (결과, 교체내역) 튜플 반환으로 변경. 치환 로직 자체는 동일.
 //    1.9.0 - apply 결과 캐싱. 같은 (원문,번역) 입력은 재계산·로그 없이 즉시 반환 →
 //            화면 재렌더마다 반복되던 과다 호출·로그 도배 해소(부하 감소). update 시 캐시 무효화.
 //    1.8.0 - 타겟 언어 별칭으로 타겟 교체 경로 추가. 별칭 언어가 타겟 언어와 같으면(예: 한영에서
@@ -40,21 +46,30 @@ final class GlossaryPairEngine {
         applyCache.removeAll()   // v1.9.0: 용어집이 바뀌면 캐시 무효화(옛 결과 방지)
     }
 
+    // v2.0.0: 후처리가 실제 교체한 내역(예: 가소성→침묵성). apply 호출 직후 읽으면 그 호출의 결과.
+    //   반영 로그의 "후처리" 카테고리 표시에 사용.
+    private(set) var lastCorrections: [(from: String, to: String)] = []
+
     // v1.9.0: apply 결과 캐시. 같은 (원문,번역) 입력엔 재계산 없이 즉시 반환(화면 재렌더 부하·로그 도배 감소).
-    private var applyCache: [String: String] = [:]
+    //   v2.0.0: 결과 문자열과 함께 교체 내역도 캐싱(후처리 카테고리 표시용).
+    private var applyCache: [String: (String, [(from: String, to: String)])] = [:]
     private let applyCacheLimit = 600
 
     // 원문 + 타겟을 받아, 양방향으로 매칭해 타겟을 교정.
     //  - 원문 언어 판별 → pair에서 그 언어 쪽 단어를 방아쇠, 반대쪽을 표준표기로.
     //  - 원문에 방아쇠어가 (규칙대로) 있으면 → 타겟에서 번역어(learnedTargets)를 표준표기로 교체.
     func apply(source: String, target: String) -> String {
+        lastCorrections = []   // v2.0.0: 이번 호출의 교체 내역 초기화
         guard !pairs.isEmpty, !target.isEmpty, !source.isEmpty else { return target }
         // v1.9.0: 캐시 히트면 재계산·로그 없이 즉시 반환.
         let cacheKey = source + "\u{1}" + target
-        if let cached = applyCache[cacheKey] { return cached }
+        if let cached = applyCache[cacheKey] {
+            lastCorrections = cached.1   // v2.0.0: 캐시된 교체 내역 복원
+            return cached.0
+        }
         let srcIsKorean = containsHangul(source)
 
-        var subs: [(from: String, to: String)] = []
+        var subs: [(from: String, to: String, trigger: String)] = []
         for p in pairs {
             let a = p.source.trimmingCharacters(in: .whitespaces)      // 예: patient
             let b = p.canonical.trimmingCharacters(in: .whitespaces)   // 예: 피험자
@@ -107,50 +122,51 @@ final class GlossaryPairEngine {
             for t in p.learnedTargets {
                 let from = t.trimmingCharacters(in: .whitespaces)
                 guard !from.isEmpty, from != replaceWith else { continue }
-                subs.append((from, replaceWith))
+                subs.append((from, replaceWith, trigger))
             }
             // 방아쇠 구 전체도 후보로(예: "government budget proposal"이 타겟에 그대로 남으면 → "정부 예산안")
             if trigger != replaceWith {
-                subs.append((trigger, replaceWith))
+                subs.append((trigger, replaceWith, trigger))
             }
             // v1.7.0: 별칭이 타겟에 원문 그대로 남은 경우도 canonical로 교체.
             //  (한국어 연사: "전군2호"→"Sky Pierce II" / 영어 연사: 타겟 한국어에 "Cheongunino"가 남으면 "천궁2호")
             for al in aliasHits where al != replaceWith {
-                subs.append((al, replaceWith))
+                subs.append((al, replaceWith, trigger))
             }
             // v1.8.0: 타겟 언어 별칭(AI가 만든 음역 등)이 타겟에 나타나면 표준표기로 교체.
             //  원문에 방아쇠어가 있어 발동된 경우에만 도달하므로 안전.
             //  예: 한영에서 원문 "천궁2호" 발동 → 타겟의 "Cheongung II"(영어 음역 별칭) → "SKY Pierce II"
             for al in targetAliasHits where al != replaceWith {
-                subs.append((al, replaceWith))
+                subs.append((al, replaceWith, trigger))
             }
         }
         guard !subs.isEmpty else {
             print("[BMG][PairGlossary] 호출됨: pairs=\(pairs.count) src=\(source.prefix(25)) → 매칭 0 (변화 없음)")
-            storeCache(cacheKey, target)   // v1.9.0
+            storeCache(cacheKey, target, [])   // v1.9.0 / v2.0.0
             return target
         }
 
         // v1.5.0: 겹침/부분조각/자기간섭을 막는 통합 치환(전체 일치 + 영역 보호).
-        let result = applySubstitutions(target, subs: subs)
+        let (result, corrections) = applySubstitutions(target, subs: subs)
+        lastCorrections = corrections   // v2.0.0: 실제 교체 내역 기록
         print("[BMG][PairGlossary] 교체: \(target.prefix(25)) → \(result.prefix(25))")
-        storeCache(cacheKey, result)   // v1.9.0
+        storeCache(cacheKey, result, corrections)   // v1.9.0 / v2.0.0
         return result
     }
 
     // v1.9.0: 캐시에 저장(상한 초과 시 비우기). 자막은 보통 수백 개 이하라 단순 비우기로 충분.
-    private func storeCache(_ key: String, _ value: String) {
+    private func storeCache(_ key: String, _ value: String, _ corr: [(from: String, to: String)]) {
         if applyCache.count >= applyCacheLimit { applyCache.removeAll() }
-        applyCache[key] = value
+        applyCache[key] = (value, corr)
     }
 
     // v1.5.0: 모든 치환을 "전체 일치 + 이미 치환한 영역 보호"로 한 번에 수행.
     //  - 부분 조각 유사 표현(긴 표현의 일부)은 제거 → phrase는 통짜로만 매칭.
     //  - 한 번 바꾼 글자 위치는 다시 안 건드림 → 자기 간섭("정부 정부 예산안") 차단.
     //  - 영어는 단어경계+단복수, 한국어는 조사 보정 포함.
-    private func applySubstitutions(_ text: String, subs rawSubs: [(from: String, to: String)]) -> String {
+    private func applySubstitutions(_ text: String, subs rawSubs: [(from: String, to: String, trigger: String)]) -> (String, [(from: String, to: String)]) {
         // 1) 중복 제거
-        var uniq: [(from: String, to: String)] = []
+        var uniq: [(from: String, to: String, trigger: String)] = []
         var seenPairs = Set<String>()
         for s in rawSubs {
             let key = s.from + "→" + s.to
@@ -159,7 +175,7 @@ final class GlossaryPairEngine {
         }
         // 2) 부분 조각 제거: from이 더 긴 다른 from의 (단어경계) 부분이면 제거.
         //    예: "government budget"는 "government budget proposal"의 부분 → 제거.
-        var subs: [(from: String, to: String)] = []
+        var subs: [(from: String, to: String, trigger: String)] = []
         for s in uniq {
             let isFragment = uniq.contains { other in
                 other.from.count > s.from.count && isSubPhrase(s.from, of: other.from)
@@ -170,9 +186,11 @@ final class GlossaryPairEngine {
         subs.sort { $0.from.count > $1.from.count }
 
         let ns = text as NSString
-        guard ns.length > 0 else { return text }
+        guard ns.length > 0 else { return (text, []) }
         var claimed = [Bool](repeating: false, count: ns.length)   // 이미 치환된 위치
-        var edits: [(loc: Int, len: Int, rep: String)] = []
+        // v2.0.0: edit에 (방아쇠어 trigger → 표준표기 to)를 기록. 로그가 통역 방향을 따르게.
+        //   영한: trigger=영어(mutability) → to=한국어(침묵성). 한영: trigger=한국어(침묵성) → to=영어(mutability).
+        var edits: [(loc: Int, len: Int, rep: String, fromT: String, toT: String)] = []
 
         for s in subs {
             let isEng = isEnglishWord(s.from)
@@ -202,25 +220,36 @@ final class GlossaryPairEngine {
                     let josa = ns.substring(with: m.range(at: 1))
                     rep = s.to + correctedJosa(josa, for: s.to)
                 }
-                edits.append((r.location, r.length, rep))
+                edits.append((r.location, r.length, rep, s.trigger, s.to))
                 var j = r.location
                 while j < r.location + r.length { claimed[j] = true; j += 1 }
             }
         }
-        guard !edits.isEmpty else { return text }
+        guard !edits.isEmpty else { return (text, []) }
 
         // 위치순으로 한 번에 조립
         edits.sort { $0.loc < $1.loc }
         var out = ""
         var cursor = 0
+        var corrections: [(from: String, to: String)] = []   // v2.0.0
         for e in edits {
             if e.loc < cursor { continue }   // 안전(겹침 방지됨)
             out += ns.substring(with: NSRange(location: cursor, length: e.loc - cursor))
             out += e.rep
             cursor = e.loc + e.len
+            corrections.append((e.fromT, e.toT))   // v2.0.0
         }
         out += ns.substring(from: cursor)
-        return out
+
+        // v2.0.0: 교체 내역 중복 제거
+        var uniqCorr: [(from: String, to: String)] = []
+        var seenCorr = Set<String>()
+        for c in corrections {
+            let k = c.from + "→" + c.to
+            if seenCorr.contains(k) { continue }
+            seenCorr.insert(k); uniqCorr.append(c)
+        }
+        return (out, uniqCorr)
     }
 
     // 받침에 민감한 조사쌍 (받침있을때, 받침없을때)

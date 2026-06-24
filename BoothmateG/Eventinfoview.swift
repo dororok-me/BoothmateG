@@ -2,8 +2,9 @@
 //  EventInfoView.swift
 //  BoothmateG
 //
-//  Version: 1.3.1
+//  Version: 1.4.0
 //  Changelog:
+//    1.4.0 - 참석자 입력칸 순서 변경: 이름을 위로, 직책을 아래로 (기존: 직책 위 / 이름 아래).
 //    1.0.0 - 행사 정보(Event Information) 입력 UI 뷰
 //    1.0.1 - 저장 버튼 dismiss 호출 수정(Button(action: dismiss) → { dismiss() }).
 //    1.1.0 - 폰트 전체 확대(.caption→.title3 등).
@@ -205,21 +206,6 @@ struct SpeakerRow: View {
                 .buttonStyle(.borderless)
             }
             
-            // 직책
-            VStack(alignment: .leading, spacing: 4) {
-                Text("직책 | Position")
-                    .font(.callout)
-                    .foregroundColor(.secondary)
-                HStack(spacing: 8) {
-                    TextField("한국어", text: $speaker.position.ko)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.body)
-                    TextField("English", text: $speaker.position.en)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.body)
-                }
-            }
-            
             // 이름
             VStack(alignment: .leading, spacing: 4) {
                 Text("이름 | Name")
@@ -230,6 +216,21 @@ struct SpeakerRow: View {
                         .textFieldStyle(.roundedBorder)
                         .font(.body)
                     TextField("English", text: $speaker.name.en)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.body)
+                }
+            }
+
+            // 직책
+            VStack(alignment: .leading, spacing: 4) {
+                Text("직책 | Position")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+                HStack(spacing: 8) {
+                    TextField("한국어", text: $speaker.position.ko)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.body)
+                    TextField("English", text: $speaker.position.en)
                         .textFieldStyle(.roundedBorder)
                         .font(.body)
                 }
