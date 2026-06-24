@@ -2,8 +2,10 @@
 //  AppSettings.swift
 //  BoothmateG
 //
-//  Version: 1.11.0
+//  Version: 1.12.0
 //  Changelog:
+//    1.12.0 - 행사정보 영구저장(eventInfoJSON) 추가. 환경 번들(.boothmate) 내보내기/가져오기 헬퍼 추가
+//             (용어집·통역 지침·블랙리스트·행사정보를 선택 항목만 한 파일로 묶음. 앱 전용 포맷).
 //    1.11.0 - GlossaryPair에 sourceAliases 추가: 원문어의 유사어/오인식 표기 등록.
 //             STT가 고유명사를 잘못 인식해도(예: 천궁2호→전군2호) 별칭이 잡히면 용어 발동.
 //    1.10.0 - 단위·환율 자동 변환 토글(convertUnitsCurrency) 추가. 단일 언어 모드 번역문에
@@ -52,6 +54,8 @@ final class AppSettings: ObservableObject {
     @AppStorage("interpretGuide") var interpretGuide: String = ""
     // v1.9.0: 단어 블랙리스트(생략할 필러) — 콤마 구분. 예: "음, 어, 저기, 그러니까요"
     @AppStorage("blacklistWords") var blacklistWords: String = ""
+    // v1.12.0: 행사 정보 영구 저장(그동안 @State뿐이라 앱 재시작 시 사라졌음). EventInfo를 JSON으로 보관.
+    @AppStorage("eventInfoJSON") var eventInfoJSON: String = ""
 
     // 다국어 모드: 청중 언어 목록 (기본: 영어/중국어 간체/일본어)
     @AppStorage("audienceLangsJSON") var audienceLangsJSON: String = "[\"en\",\"zh-Hans\",\"ja\"]"
@@ -97,6 +101,85 @@ final class AppSettings: ObservableObject {
               let str = String(data: data, encoding: .utf8)
         else { return }
         glossaryPairJSON = str
+    }
+
+    // v1.12.0: 행사 정보 영구 저장/불러오기
+    func loadEventInfo() -> EventInfo {
+        guard let data = eventInfoJSON.data(using: .utf8),
+              let ev = try? JSONDecoder().decode(EventInfo.self, from: data)
+        else { return EventInfo() }
+        return ev
+    }
+
+    func saveEventInfo(_ ev: EventInfo) {
+        guard let data = try? JSONEncoder().encode(ev),
+              let str = String(data: data, encoding: .utf8)
+        else { return }
+        eventInfoJSON = str
+    }
+
+    // ── v1.12.0: 환경 번들(.boothmate) — 용어집·통역 지침·블랙리스트·행사정보를 한 파일로 묶어
+    //   다른 컴퓨터로 그대로 옮기거나 백업. 선택한 항목만 포함/적용. 앱 전용 포맷(식별자로 검증). ──
+
+    // 내보낼/가져올 항목 선택
+    struct BundleItems {
+        var glossary: Bool = true
+        var guide: Bool = true
+        var blacklist: Bool = true
+        var event: Bool = true
+    }
+
+    // 파일에 담기는 구조. 선택 안 한 항목은 nil(미포함).
+    struct BoothmateBundle: Codable {
+        var format: String = "boothmate.bundle.v1"   // 앱 식별자 — 다른 파일 거부용
+        var exportedAt: String = ""
+        var glossaryPairs: [GlossaryPair]?
+        var interpretGuide: String?
+        var blacklistWords: String?
+        var eventInfo: EventInfo?
+    }
+
+    /// 선택 항목으로 번들 데이터(JSON) 생성. 실패 시 nil.
+    func makeBundleData(_ items: BundleItems) -> Data? {
+        var b = BoothmateBundle()
+        let fmt = ISO8601DateFormatter()
+        b.exportedAt = fmt.string(from: Date())
+        if items.glossary  { b.glossaryPairs   = loadGlossaryPairs() }
+        if items.guide     { b.interpretGuide  = interpretGuide }
+        if items.blacklist { b.blacklistWords  = blacklistWords }
+        if items.event     { b.eventInfo       = loadEventInfo() }
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try? enc.encode(b)
+    }
+
+    /// 번들 데이터를 적용. 파일에 들어있고 + 선택된 항목만 반영.
+    /// 반환: (성공 여부, 실제로 적용된 항목 이름들). 형식이 다른 파일이면 (false, []).
+    @discardableResult
+    func applyBundleData(_ data: Data, items: BundleItems) -> (ok: Bool, applied: [String]) {
+        guard let b = try? JSONDecoder().decode(BoothmateBundle.self, from: data),
+              b.format.hasPrefix("boothmate.bundle")
+        else { return (false, []) }
+
+        var applied: [String] = []
+        if items.glossary, let g = b.glossaryPairs   { saveGlossaryPairs(g); applied.append("용어집") }
+        if items.guide,    let g = b.interpretGuide  { interpretGuide = g;   applied.append("통역 지침") }
+        if items.blacklist,let bl = b.blacklistWords { blacklistWords = bl;  applied.append("블랙리스트") }
+        if items.event,    let ev = b.eventInfo      { saveEventInfo(ev);    applied.append("행사 정보") }
+        return (true, applied)
+    }
+
+    /// 파일에 어떤 항목이 들어있는지 미리 확인(가져오기 UI 안내용). 형식이 다르면 nil.
+    func inspectBundle(_ data: Data) -> BundleItems? {
+        guard let b = try? JSONDecoder().decode(BoothmateBundle.self, from: data),
+              b.format.hasPrefix("boothmate.bundle")
+        else { return nil }
+        return BundleItems(
+            glossary: b.glossaryPairs != nil,
+            guide: b.interpretGuide != nil,
+            blacklist: b.blacklistWords != nil,
+            event: b.eventInfo != nil
+        )
     }
 
     func loadAudienceLangs() -> [String] {

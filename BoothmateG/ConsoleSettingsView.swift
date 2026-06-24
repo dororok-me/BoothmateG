@@ -2,8 +2,11 @@
 //  ConsoleSettingsView.swift
 //  BoothmateG
 //
-//  Version: 1.5.0
+//  Version: 1.7.0
 //  Changelog:
+//    1.7.0 - 전사문 보관 안내 문구를 "최근 50개 세션" → "최근 3개월"로 수정(TranscriptArchive 1.1.0 정책 반영).
+//    1.6.0 - 환경 내보내기/가져오기 섹션 추가(.boothmate). 용어집·통역 지침·블랙리스트·행사정보를
+//            항목 선택(체크박스)해 한 파일로 묶어 백업/이전. 가져오기는 파일에 있고+선택한 항목만 적용.
 //    1.5.0 - 단위·환율 자동 변환 토글(convertUnitsCurrency) UI 추가. 번역 음성 재생 토글 아래.
 //    1.3.0 - Fish Audio TTS 설정 섹션 추가(켜기/언어/API키/음성ID). 전체 ScrollView화.
 //    1.4.0 - 음성 입력 자동 중지 Picker 추가(끄기/1/3/5/10분). 높이 760.
@@ -14,6 +17,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 struct ConsoleSettingsView: View {
     @Environment(\.dismiss) private var dismiss
@@ -23,6 +27,17 @@ struct ConsoleSettingsView: View {
 
     // 전사문 내보내기 (현재 전사문을 .txt로 저장) — ContentView가 구현
     var onExportTranscript: () -> Void = {}
+
+    // v1.6.0: 환경 가져오기 후 ContentView가 행사정보(@State)를 다시 로드하도록 알림
+    var onDataImported: () -> Void = {}
+
+    // v1.6.0: 환경 백업 항목 선택
+    @State private var bxGlossary = true
+    @State private var bxGuide = true
+    @State private var bxBlacklist = true
+    @State private var bxEvent = true
+    @State private var bundleMessage: String? = nil
+    @State private var bundleMessageColor: Color = .green
 
     // ContentView와 동일한 키를 사용 → 자동 동기화
     @AppStorage("console_targetFont") private var targetFont: Double = 18
@@ -118,7 +133,7 @@ struct ConsoleSettingsView: View {
             // ── 전사문 ──
             VStack(alignment: .leading, spacing: 8) {
                 Text("전사문").font(.subheadline.weight(.semibold))
-                Text("세션을 정지하면 전사문이 자동으로 저장됩니다. 최근 50개 세션까지 보관돼요. (파일명에 날짜·시간 포함, .txt)")
+                Text("세션을 정지하면 전사문이 자동으로 저장됩니다. 최근 3개월까지 보관돼요. (파일명에 날짜·시간 포함, .txt)")
                     .font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 8) {
@@ -199,6 +214,48 @@ struct ConsoleSettingsView: View {
 
             Divider()
 
+            // ── v1.6.0: 환경 백업 (.boothmate) ──
+            // 용어집·통역 지침·블랙리스트·행사정보를 한 파일로 묶어 다른 컴퓨터로 옮기거나 백업.
+            VStack(alignment: .leading, spacing: 8) {
+                Text("환경 내보내기 / 가져오기").font(.subheadline.weight(.semibold))
+                Text("용어집·통역 지침·블랙리스트·행사정보를 한 파일(.boothmate)로 저장해 다른 컴퓨터에서 그대로 불러옵니다. 아래에서 포함할 항목을 고르세요. (가져오기는 파일에 있고 + 선택한 항목만 적용됩니다.)")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                // 항목 선택
+                VStack(alignment: .leading, spacing: 2) {
+                    Toggle("용어집", isOn: $bxGlossary)
+                    Toggle("통역 지침", isOn: $bxGuide)
+                    Toggle("블랙리스트", isOn: $bxBlacklist)
+                    Toggle("행사 정보", isOn: $bxEvent)
+                }
+                .toggleStyle(.checkbox)
+                .font(.callout)
+
+                HStack(spacing: 8) {
+                    Button {
+                        exportBundle()
+                    } label: {
+                        Label("내보내기", systemImage: "square.and.arrow.up")
+                    }
+                    .disabled(!(bxGlossary || bxGuide || bxBlacklist || bxEvent))
+                    Button {
+                        importBundle()
+                    } label: {
+                        Label("가져오기", systemImage: "square.and.arrow.down")
+                    }
+                    Spacer()
+                    if let msg = bundleMessage {
+                        Text(msg)
+                            .font(.caption)
+                            .foregroundStyle(bundleMessageColor)
+                            .transition(.opacity)
+                    }
+                }
+            }
+
+            Divider()
+
             // ── Gemini API 키 (가장 아래) ──
             VStack(alignment: .leading, spacing: 6) {
                 Text("Gemini API 키").font(.subheadline.weight(.semibold))
@@ -216,5 +273,58 @@ struct ConsoleSettingsView: View {
         }
         .frame(width: 460, height: 760)
         .preferredColorScheme(night ? .dark : nil)
+    }
+
+    // ── v1.6.0: 환경 번들 내보내기/가져오기 ──
+    private func currentItems() -> AppSettings.BundleItems {
+        AppSettings.BundleItems(glossary: bxGlossary, guide: bxGuide,
+                                blacklist: bxBlacklist, event: bxEvent)
+    }
+
+    private func flash(_ msg: String, _ color: Color) {
+        bundleMessageColor = color
+        withAnimation { bundleMessage = msg }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            withAnimation { bundleMessage = nil }
+        }
+    }
+
+    private func exportBundle() {
+        guard let data = settings.makeBundleData(currentItems()) else {
+            flash("내보내기 실패", .red); return
+        }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "boothmate_환경.boothmate"
+        panel.canCreateDirectories = true
+        panel.title = "환경 내보내기"
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                try data.write(to: url)
+                flash("내보내기 완료", .green)
+            } catch {
+                flash("저장 실패", .red)
+            }
+        }
+    }
+
+    private func importBundle() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.title = "환경 가져오기 (.boothmate)"
+        guard panel.runModal() == .OK, let url = panel.url,
+              let data = try? Data(contentsOf: url) else { return }
+
+        let result = settings.applyBundleData(data, items: currentItems())
+        if result.ok {
+            if result.applied.isEmpty {
+                flash("적용할 항목이 없습니다", .orange)
+            } else {
+                onDataImported()   // ContentView가 행사정보 등 다시 로드
+                flash("가져오기 완료: \(result.applied.joined(separator: ", "))", .green)
+            }
+        } else {
+            flash("올바른 BoothmateG 환경 파일이 아닙니다", .red)
+        }
     }
 }

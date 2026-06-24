@@ -2,8 +2,11 @@
 //  TranscriptArchive.swift
 //  BoothmateG
 //
-//  Version: 1.0.0
+//  Version: 1.1.0
 //  Changelog:
+//    1.1.0 - 보관 정책을 "최근 50개 세션" → "최근 3개월"로 변경.
+//            prune()이 개수 기준 대신 생성일 기준으로 3개월(maxAgeMonths)보다 오래된 .txt를 삭제.
+//            기존 maxSessions 상수는 미사용으로 남겨 둠(append-only).
 //    1.0.0 - 최초 작성.
 //            · 세션 전사문(.txt) 자동 저장 — 최근 50개 세션까지 보관(초과 시 오래된 것부터 삭제)
 //            · 파일명에 날짜·시간 포함 (예: transcript_20260614_153012.txt)
@@ -17,7 +20,8 @@ import UniformTypeIdentifiers
 
 enum TranscriptArchive {
 
-    static let maxSessions = 50
+    static let maxSessions = 50          // (미사용) 1.0.0 개수 기준 보관 정책 잔존
+    static let maxAgeMonths = 3          // 보관 기간: 최근 3개월
 
     // 저장 폴더: ~/Library/Application Support/BoothmateG/Transcripts
     static var folderURL: URL {
@@ -36,7 +40,7 @@ enum TranscriptArchive {
         return f.string(from: date)
     }
 
-    // 자동 저장 (내용이 비어 있으면 저장 안 함). 저장 후 50개 초과분 정리.
+    // 자동 저장 (내용이 비어 있으면 저장 안 함). 저장 후 3개월 지난 전사문 정리.
     @discardableResult
     static func autoSave(_ text: String, started: Date?) -> URL? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -55,7 +59,7 @@ enum TranscriptArchive {
         return url
     }
 
-    // 50개 초과 시 오래된 파일부터 삭제
+    // 생성일이 3개월(maxAgeMonths) 이전인 전사문 삭제
     static func prune() {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(
@@ -63,16 +67,16 @@ enum TranscriptArchive {
             includingPropertiesForKeys: [.creationDateKey],
             options: [.skipsHiddenFiles]) else { return }
 
-        let txts = files.filter { $0.pathExtension.lowercased() == "txt" }
-        guard txts.count > maxSessions else { return }
+        // 기준 시각: 지금으로부터 maxAgeMonths개월 전. 계산 실패 시 정리 생략(안전).
+        guard let cutoff = Calendar.current.date(
+            byAdding: .month, value: -maxAgeMonths, to: Date()) else { return }
 
-        let sorted = txts.sorted { a, b in
-            let da = (try? a.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
-            let db = (try? b.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
-            return da < db   // 오래된 것이 앞
-        }
-        for old in sorted.prefix(txts.count - maxSessions) {
-            try? fm.removeItem(at: old)
+        let txts = files.filter { $0.pathExtension.lowercased() == "txt" }
+        for url in txts {
+            let created = (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
+            if created < cutoff {
+                try? fm.removeItem(at: url)
+            }
         }
     }
 

@@ -2,8 +2,10 @@
 //  EventInfoView.swift
 //  BoothmateG
 //
-//  Version: 1.4.0
+//  Version: 1.5.0
 //  Changelog:
+//    1.5.0 - 저장 시 창을 닫지 않고 중간 저장(영구 반영). 변경 감지로 저장 버튼 활성/비활성,
+//            '저장됨' 표시 + '닫기' 버튼 분리. (용어집 창과 동일한 저장 UX로 통일)
 //    1.4.0 - 참석자 입력칸 순서 변경: 이름을 위로, 직책을 아래로 (기존: 직책 위 / 이름 아래).
 //    1.0.0 - 행사 정보(Event Information) 입력 UI 뷰
 //    1.0.1 - 저장 버튼 dismiss 호출 수정(Button(action: dismiss) → { dismiss() }).
@@ -21,9 +23,22 @@ import SwiftUI
 
 struct EventInfoView: View {
     @Binding var eventInfo: EventInfo
+    var onSave: () -> Void = {}   // v1.5.0: 저장 시 영구 반영(ContentView가 settings.saveEventInfo 연결)
     @Environment(\.dismiss) var dismiss
     
     @State private var editingPosition = -1  // 수정 중인 참석자 인덱스
+    // v1.5.0: 변경 감지(마지막 저장 시점 스냅샷) + 저장됨 토스트
+    @State private var savedSnapshot = ""
+    @State private var showSavedToast = false
+
+    // 현재 행사정보를 비교용 문자열로(Codable JSON, 키 정렬로 안정적 비교)
+    private var currentSnapshot: String {
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.sortedKeys]
+        guard let d = try? enc.encode(eventInfo), let s = String(data: d, encoding: .utf8) else { return "" }
+        return s
+    }
+    private var hasUnsavedChanges: Bool { currentSnapshot != savedSnapshot }
     
     var body: some View {
         VStack(spacing: 0) {
@@ -150,16 +165,46 @@ struct EventInfoView: View {
 
                 Spacer()
 
-                Button(action: { dismiss() }) {
+                // 저장 완료 피드백 / 미저장 안내
+                if showSavedToast {
+                    Label("저장됨", systemImage: "checkmark.circle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.green)
+                        .transition(.opacity)
+                } else if hasUnsavedChanges {
+                    Text("저장 안 된 변경 있음")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
+                // 닫기(저장 안 함, 창만 닫기)
+                Button("닫기") { dismiss() }
+                    .controlSize(.large)
+
+                // 저장 → 창은 유지. 변경 없으면 비활성(회색).
+                Button(action: saveEventInfo) {
                     Label("저장", systemImage: "checkmark.circle.fill")
                         .font(.body)
-                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .keyboardShortcut(.defaultAction)
+                .disabled(!hasUnsavedChanges)
             }
             .padding(16)
         }
         .frame(minWidth: 600, minHeight: 500)
+        .onAppear { savedSnapshot = currentSnapshot }   // v1.5.0: 열 때 기준 스냅샷(저장 버튼 회색)
+    }
+
+    // v1.5.0: 중간 저장 — 영구 반영 + 스냅샷 갱신(버튼 회색) + '저장됨' 잠깐 표시. 창은 닫지 않음.
+    private func saveEventInfo() {
+        onSave()
+        savedSnapshot = currentSnapshot
+        withAnimation { showSavedToast = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            withAnimation { showSavedToast = false }
+        }
     }
     
     private func addSpeaker() {

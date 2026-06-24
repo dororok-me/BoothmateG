@@ -2,8 +2,13 @@
 //  ContentView.swift
 //  BoothmateG
 //
-//  Version: 2.83.0
+//  Version: 2.87.0
 //  Changelog:
+//    2.87.0 - 상단 라벨 "번역 언어" → "번역 언어 선택", 언어 선택 버튼의 "변경" 표기 → "리스트"로 변경(빈 상태는 "선택" 유지).
+//    2.86.0 - 헤더 로고 아래에 앱 버전 표기("Ver. 1.0") 추가. 로고를 VStack으로 감싸 하단에 작은 회색 텍스트로 표시.
+//    2.85.0 - 행사정보 창에 중간 저장 연결(onSave). 저장 눌러도 창 유지·즉시 영구저장.
+//    2.84.0 - 행사정보 영구저장 연동(onAppear에 settings.loadEventInfo, 행사정보 창 닫을 때 saveEventInfo).
+//             앱 설정의 환경 가져오기 후 행사정보를 다시 로드하도록 onDataImported 콜백 연결.
 //    2.83.0 - 용어집 '이 방식 사용' 토글 제거 → 용어집·통역 지침·블랙리스트를 항상 적용(단일·다국어 공통).
 //    2.82.0 - [후처리 카테고리 추가] 반영 로그에 "후처리"(청록) 카테고리 신설. 후처리 엔진(GlossaryPairEngine)이
 //             AI 의역을 용어집 표준표기로 강제 교체하면 그 내역(예: "가소성 → 침묵성")을 로그에 남김.
@@ -265,6 +270,7 @@ struct ContentView: View {
             // v2.71.0: onAudioRMS 콜백 제거 — RMS는 audio.lastRMS로 직접 읽음(@State 재렌더 폭주 차단)
             audienceLangs = settings.loadAudienceLangs()   // v2.68.0: [통합] 화자 제외 필터 폐기
             multiStore.setLanguages(audienceLangs)
+            eventInfo = settings.loadEventInfo()   // v2.84.0: 행사정보 영구저장본 불러오기
         }
         .onChange(of: settings.playTranslatedAudio) { _, on in
             if on && isRunning { audioPlayer.start() } else { audioPlayer.stop() }
@@ -283,11 +289,13 @@ struct ContentView: View {
             }
         }
         // v2.56.0: 행사 정보 시트
-        .sheet(isPresented: $showEventInfo) {
-            EventInfoView(eventInfo: $eventInfo)
+        .sheet(isPresented: $showEventInfo, onDismiss: { settings.saveEventInfo(eventInfo) }) {
+            EventInfoView(eventInfo: $eventInfo, onSave: { settings.saveEventInfo(eventInfo) })
         }
         .sheet(isPresented: $showSettings) {
-            ConsoleSettingsView(settings: settings, onExportTranscript: { exportCurrentTranscript() })
+            ConsoleSettingsView(settings: settings,
+                                onExportTranscript: { exportCurrentTranscript() },
+                                onDataImported: { eventInfo = settings.loadEventInfo() })
         }
         .sheet(isPresented: $showInputSource) {
             InputSourceView { dev in
@@ -319,11 +327,17 @@ struct ContentView: View {
     // ═══════════════ 헤더 ═══════════════
     private var headerArea: some View {
         HStack(alignment: .center, spacing: 14) {
-            Image("BoothmateG_logo_512")
-                .resizable()
-                .scaledToFit()
-                .frame(height: 84)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
+            // v2.86.0: 로고 + 그 아래 앱 버전 표기
+            VStack(spacing: 4) {
+                Image("BoothmateG_logo_512")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(height: 84)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                Text("Ver. 1.0")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
 
             Divider().frame(height: 80)
             // v2.69.0: [통합] 단일 모드 화면 숨김(코드 보존). 되살리려면 #if false → #if true
@@ -444,11 +458,11 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 10) {
             // 줄1: 번역 언어 라벨 + 선택/변경 버튼
             HStack(spacing: 8) {
-                Text("번역 언어").font(.headline).foregroundStyle(.secondary)
+                Text("번역 언어 선택").font(.headline).foregroundStyle(.secondary)
                 Button { showAudienceLangs = true } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "slider.horizontal.3")
-                        Text(audienceLangs.isEmpty ? "선택" : "변경")
+                        Text(audienceLangs.isEmpty ? "선택" : "리스트")
                     }
                     .font(.callout)
                 }
