@@ -2,8 +2,12 @@
 //  FirebaseRelay.swift
 //  BoothmateG
 //
-//  Version: 2.4.0
+//  Version: 2.5.0
 //  Changelog:
+//    2.5.0 - 구글 로그인 추가(signInWithGoogle). GoogleAuth가 받은 구글 id_token을
+//            Firebase Identity Toolkit signInWithIdp로 교환해 기존 송출 토큰 흐름에 연결.
+//            로그인 UID(authUID) 공개 + 구글 refreshToken 키체인 저장으로 자동 로그인.
+//            기존 이메일/비번 로그인은 그대로 유지(append-only).
 //    1.0.0 - 최초 작성. RTDB REST로 자막 실시간 송출.
 //    1.1.0 - deleteSession 추가 (행사 종료 시 RTDB 세션 데이터 삭제).
 //    2.0.0 - 보안: 호스트 로그인(Firebase Auth) + 모든 쓰기에 토큰 부착. 싱글톤화.
@@ -69,6 +73,8 @@ final class FirebaseRelay: ObservableObject {
     @Published var authReady = false
     @Published var authEmail = ""
     @Published var authError: String?
+    // v2.5.0: 현재 로그인된 사용자 UID (멀티유저 자막 경로 분리에 사용 예정)
+    @Published var authUID = ""
 
     private var idToken: String?
     private var refreshToken: String?
@@ -86,6 +92,17 @@ final class FirebaseRelay: ObservableObject {
            !e.isEmpty, !p.isEmpty {
             authEmail = e
             signIn(email: e, password: p, save: false)
+        }
+        // v2.5.0: 구글 로그인 자동 복원 — 저장된 구글 refreshToken으로 토큰 갱신
+        else if let grt = HostKeychain.get("googleRefresh"), !grt.isEmpty {
+            self.refreshToken = grt
+            withToken { [weak self] t in
+                guard let self, let t, !t.isEmpty else { return }
+                DispatchQueue.main.async {
+                    self.authReady = true
+                    if self.authEmail.isEmpty { self.authEmail = "Google 계정" }
+                }
+            }
         }
     }
 
@@ -131,7 +148,66 @@ final class FirebaseRelay: ObservableObject {
     func signOut() {
         idToken = nil; refreshToken = nil; tokenExpiry = .distantPast
         HostKeychain.clear("email"); HostKeychain.clear("password")
-        DispatchQueue.main.async { self.authReady = false; self.authEmail = ""; self.authError = nil }
+        HostKeychain.clear("googleRefresh")   // v2.5.0: 구글 자동 로그인도 해제
+        DispatchQueue.main.async {
+            self.authReady = false; self.authEmail = ""; self.authUID = ""; self.authError = nil
+        }
+    }
+
+    // MARK: - 구글 로그인 (v2.5.0)
+
+    /// 구글 로그인 시작 → 구글 id_token을 Firebase 인증 토큰으로 교환.
+    func signInWithGoogle() {
+        GoogleAuth.shared.signIn { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .failure(let e):
+                DispatchQueue.main.async {
+                    self.authReady = false
+                    self.authError = "구글 로그인 실패: \(e.localizedDescription)"
+                }
+            case .success(let googleIDToken):
+                self.exchangeGoogleToken(googleIDToken)
+            }
+        }
+    }
+
+    /// 구글 id_token → Firebase(Identity Toolkit signInWithIdp) 토큰 교환.
+    private func exchangeGoogleToken(_ googleIDToken: String) {
+        let urlStr = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key=\(apiKey)"
+        guard let url = URL(string: urlStr) else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "postBody": "id_token=\(googleIDToken)&providerId=google.com",
+            "requestUri": "http://localhost",
+            "returnIdpCredential": true,
+            "returnSecureToken": true
+        ])
+        URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
+            guard let self else { return }
+            guard let data,
+                  let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tok = j["idToken"] as? String else {
+                DispatchQueue.main.async {
+                    self.authReady = false; self.authError = "구글 인증 교환 실패"
+                }
+                return
+            }
+            self.idToken = tok
+            self.refreshToken = j["refreshToken"] as? String
+            let secs = Double(j["expiresIn"] as? String ?? "3600") ?? 3600
+            self.tokenExpiry = Date().addingTimeInterval(secs)
+            // 구글 자동 로그인을 위해 refreshToken을 키체인에 저장
+            if let rt = self.refreshToken, !rt.isEmpty { HostKeychain.set("googleRefresh", rt) }
+            let email = (j["email"] as? String) ?? "Google 계정"
+            let uid = (j["localId"] as? String) ?? ""
+            DispatchQueue.main.async {
+                self.authReady = true; self.authEmail = email
+                self.authUID = uid; self.authError = nil
+            }
+        }.resume()
     }
 
     /// 유효한 토큰을 보장(필요 시 갱신)하고 콜백으로 전달. 없으면 nil.

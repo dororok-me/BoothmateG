@@ -2,8 +2,11 @@
 //  HostLoginView.swift
 //  BoothmateG
 //
-//  Version: 1.0.0
-//  호스트(송출자) 로그인 화면. Firebase Auth 이메일/비번으로 로그인하면
+//  Version: 1.1.0
+//  Changelog:
+//    1.1.0 - "Google로 로그인" 버튼 추가(relay.signInWithGoogle). 기존 이메일/비번 로그인은 그대로 유지.
+//    1.0.0 - 최초 작성.
+//  호스트(송출자) 로그인 화면. Firebase Auth 이메일/비번 또는 구글로 로그인하면
 //  앱이 토큰으로 RTDB에 자막을 쓸 수 있다. 자격증명은 키체인에 저장돼 다음부터 자동 로그인.
 //  청중은 로그인하지 않는다(읽기 전용).
 //
@@ -58,6 +61,20 @@ struct HostLoginView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(email.isEmpty || password.isEmpty)
+
+                // v1.1.0: 구글 로그인 (이메일/비번과 별도, 클릭 시 구글 인증 창이 뜸)
+                HStack {
+                    VStack { Divider() }
+                    Text("또는").font(.caption).foregroundStyle(.secondary)
+                    VStack { Divider() }
+                }
+                Button { relay.signInWithGoogle() } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "globe")
+                        Text("Google 계정으로 로그인")
+                    }.frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
 
                 Spacer()
             }
