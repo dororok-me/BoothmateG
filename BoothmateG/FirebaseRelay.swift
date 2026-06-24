@@ -2,8 +2,15 @@
 //  FirebaseRelay.swift
 //  BoothmateG
 //
-//  Version: 2.5.0
+//  Version: 2.7.0
 //  Changelog:
+//    2.7.0 - 구글 로그인 이메일을 키체인(googleEmail)에 저장 → 앱 재실행 자동복원 시에도
+//            "Google 계정" 대신 실제 이메일을 표시. signOut에서 함께 삭제.
+//    2.6.0 - [멀티유저 자막 경로 분리] 자막을 sessions/{sid} → sessions/{uid}/{sid}로 저장.
+//            각 통역사가 자기 UID 칸에만 쓰므로 충돌 불가·남의 세션 덮어쓰기 방지(규칙과 함께).
+//            authUID를 이메일/구글/자동복원 모든 로그인에서 일관되게 채움(localId·user_id).
+//            송출 경로는 시작 시점 authUID를 캡처(sessionOwnerUID)해 사용. 관리(삭제)는 현재 authUID.
+//            ※ 청중 QR 링크(?u=uid&s=sid)·sub.html·RTDB 규칙을 함께 새 구조로 바꿔야 작동.
 //    2.5.0 - 구글 로그인 추가(signInWithGoogle). GoogleAuth가 받은 구글 id_token을
 //            Firebase Identity Toolkit signInWithIdp로 교환해 기존 송출 토큰 흐름에 연결.
 //            로그인 UID(authUID) 공개 + 구글 refreshToken 키체인 저장으로 자동 로그인.
@@ -73,8 +80,10 @@ final class FirebaseRelay: ObservableObject {
     @Published var authReady = false
     @Published var authEmail = ""
     @Published var authError: String?
-    // v2.5.0: 현재 로그인된 사용자 UID (멀티유저 자막 경로 분리에 사용 예정)
+    // v2.5.0: 현재 로그인된 사용자 UID (멀티유저 자막 경로 분리에 사용)
     @Published var authUID = ""
+    // v2.6.0: 송출 시작 시점에 캡처한 자막 경로 소유자 UID (sessions/{uid}/{sid})
+    private var sessionOwnerUID = ""
 
     private var idToken: String?
     private var refreshToken: String?
@@ -96,6 +105,9 @@ final class FirebaseRelay: ObservableObject {
         // v2.5.0: 구글 로그인 자동 복원 — 저장된 구글 refreshToken으로 토큰 갱신
         else if let grt = HostKeychain.get("googleRefresh"), !grt.isEmpty {
             self.refreshToken = grt
+            // v2.7.0: 저장된 구글 이메일을 먼저 표시(없으면 폴백)
+            let savedEmail = HostKeychain.get("googleEmail") ?? ""
+            if !savedEmail.isEmpty { authEmail = savedEmail }
             withToken { [weak self] t in
                 guard let self, let t, !t.isEmpty else { return }
                 DispatchQueue.main.async {
@@ -135,8 +147,9 @@ final class FirebaseRelay: ObservableObject {
                     HostKeychain.set("email", email)
                     HostKeychain.set("password", password)
                 }
+                let uid = (j["localId"] as? String) ?? ""   // v2.6.0: 이메일 로그인도 UID 채움
                 DispatchQueue.main.async {
-                    self.authReady = true; self.authEmail = email; self.authError = nil
+                    self.authReady = true; self.authEmail = email; self.authUID = uid; self.authError = nil
                 }
             } else {
                 let msg = ((j["error"] as? [String: Any])?["message"] as? String) ?? "이메일/비밀번호 확인"
@@ -149,6 +162,7 @@ final class FirebaseRelay: ObservableObject {
         idToken = nil; refreshToken = nil; tokenExpiry = .distantPast
         HostKeychain.clear("email"); HostKeychain.clear("password")
         HostKeychain.clear("googleRefresh")   // v2.5.0: 구글 자동 로그인도 해제
+        HostKeychain.clear("googleEmail")     // v2.7.0: 저장된 구글 이메일도 삭제
         DispatchQueue.main.async {
             self.authReady = false; self.authEmail = ""; self.authUID = ""; self.authError = nil
         }
@@ -202,6 +216,8 @@ final class FirebaseRelay: ObservableObject {
             // 구글 자동 로그인을 위해 refreshToken을 키체인에 저장
             if let rt = self.refreshToken, !rt.isEmpty { HostKeychain.set("googleRefresh", rt) }
             let email = (j["email"] as? String) ?? "Google 계정"
+            // v2.7.0: 자동복원 시에도 실제 이메일을 표시하도록 키체인에 저장
+            if email != "Google 계정" { HostKeychain.set("googleEmail", email) }
             let uid = (j["localId"] as? String) ?? ""
             DispatchQueue.main.async {
                 self.authReady = true; self.authEmail = email
@@ -229,6 +245,10 @@ final class FirebaseRelay: ObservableObject {
                 self.refreshToken = (j["refresh_token"] as? String) ?? self.refreshToken
                 let secs = Double(j["expires_in"] as? String ?? "3600") ?? 3600
                 self.tokenExpiry = Date().addingTimeInterval(secs)
+                // v2.6.0: 자동 복원/갱신 시에도 UID 채움(refresh 응답의 user_id)
+                if let uid = j["user_id"] as? String, !uid.isEmpty {
+                    DispatchQueue.main.async { self.authUID = uid }
+                }
                 done(t)
             } else {
                 done(self.idToken)
@@ -241,11 +261,13 @@ final class FirebaseRelay: ObservableObject {
     func startBroadcast(sessionId: String, eventName: String, sessionName: String,
                         mode: String, langs: [String: String], logoPath: String = "") {
         self.sessionId = sessionId
+        self.sessionOwnerUID = authUID   // v2.6.0: 송출 경로 소유자 UID 캡처
         self.active = true
         latest.removeAll(); lastSent.removeAll(); scheduled.removeAll()
+        let uid = sessionOwnerUID
         // v2.4.0: 송출 시작 시 이전 라이브 자막·음성을 먼저 삭제 → 청중 폰에 지난 자막이 남지 않음
-        send("DELETE", "sessions/\(sessionId)/live", nil)
-        send("DELETE", "sessions/\(sessionId)/audioLive", nil)
+        send("DELETE", "sessions/\(uid)/\(sessionId)/live", nil)
+        send("DELETE", "sessions/\(uid)/\(sessionId)/audioLive", nil)
         let meta: [String: Any] = [
             "eventName": eventName,
             "sessionName": sessionName,
@@ -253,7 +275,7 @@ final class FirebaseRelay: ObservableObject {
             "langs": langs,
             "active": true
         ]
-        send("PUT", "sessions/\(sessionId)/meta", meta)
+        send("PUT", "sessions/\(uid)/\(sessionId)/meta", meta)
         // 행사 로고가 있으면 Storage에 올리고 meta.logoUrl을 채움(완료되면 청중 화면에 표시)
         if !logoPath.isEmpty {
             uploadLogo(sessionId: sessionId, path: logoPath)
@@ -263,20 +285,20 @@ final class FirebaseRelay: ObservableObject {
     func stopBroadcast() {
         guard active, let sid = sessionId else { active = false; return }
         active = false
-        send("PATCH", "sessions/\(sid)/meta", ["active": false])
+        send("PATCH", "sessions/\(sessionOwnerUID)/\(sid)/meta", ["active": false])
     }
 
-    /// 세션 데이터 전체 삭제 (RTDB에서 /sessions/{id} 제거 → 청중 링크 무효화)
+    /// 세션 데이터 전체 삭제 (RTDB에서 /sessions/{uid}/{id} 제거 → 청중 링크 무효화)
     func deleteSession(_ sessionId: String) {
-        guard !sessionId.isEmpty else { return }
-        send("DELETE", "sessions/\(sessionId)", nil)
+        guard !sessionId.isEmpty, !authUID.isEmpty else { return }
+        send("DELETE", "sessions/\(authUID)/\(sessionId)", nil)
     }
 
     /// 라이브 자막·음성만 삭제 (meta·QR은 유지 → 링크 살아있음)
         func clearLive(_ sessionId: String) {
-            guard !sessionId.isEmpty else { return }
-            send("DELETE", "sessions/\(sessionId)/live", nil)
-            send("DELETE", "sessions/\(sessionId)/audioLive", nil)
+            guard !sessionId.isEmpty, !authUID.isEmpty else { return }
+            send("DELETE", "sessions/\(authUID)/\(sessionId)/live", nil)
+            send("DELETE", "sessions/\(authUID)/\(sessionId)/audioLive", nil)
         }
     
     func updateLive(lang: String, current: String, lines: [String]) {
@@ -297,7 +319,7 @@ final class FirebaseRelay: ObservableObject {
     private func flush(_ lang: String) {
         guard active, let sid = sessionId, let body = latest[lang] else { return }
         lastSent[lang] = Date()
-        send("PUT", "sessions/\(sid)/live/\(lang)", body)
+        send("PUT", "sessions/\(sessionOwnerUID)/\(sid)/live/\(lang)", body)
     }
 
     // MARK: - 음성 클립 업로드 (2단계)
@@ -325,7 +347,7 @@ final class FirebaseRelay: ObservableObject {
                     dl += "&token=\(dtoken)"
                 }
                 let body: [String: Any] = ["seq": seq, "url": dl, "ts": Int(Date().timeIntervalSince1970 * 1000)]
-                self.send("POST", "sessions/\(sessionId)/audioLive/\(lang)", body)
+                self.send("POST", "sessions/\(self.sessionOwnerUID)/\(sessionId)/audioLive/\(lang)", body)
             }.resume()
         }
     }
@@ -368,7 +390,7 @@ final class FirebaseRelay: ObservableObject {
                    !dtoken.isEmpty {
                     dl += "&token=\(dtoken)"
                 }
-                self.send("PATCH", "sessions/\(sessionId)/meta", ["logoUrl": dl])
+                self.send("PATCH", "sessions/\(self.sessionOwnerUID)/\(sessionId)/meta", ["logoUrl": dl])
             }.resume()
         }
     }

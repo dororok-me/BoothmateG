@@ -6,9 +6,13 @@
 <meta name="theme-color" content="#ffffff">
 <title>실시간 자막 · Live Subtitles</title>
 <!--
-  BoothmateG 청중용 자막 페이지 (sub.html)  v1.5.1
+  BoothmateG 청중용 자막 페이지 (sub.html)  v1.10.0
   ───────────────────────────────────────────────────────────────────────
   변경:
+    1.10.0 - 청중 편의: 자막 글자 굵기 조절(B−/B+, 기억) + '친구에게 QR 보여주기'(지금 보는 링크를
+             QR로 띄워 옆 사람이 스캔해 입장). QRCode 라이브러리(esm CDN) 사용.
+    1.9.0 - [멀티유저] 링크에 호스트 UID(?u=) 포함 → sessions/{uid}/{sid}에서 읽음.
+            u가 없는 구버전 링크는 기존 sessions/{sid}로 폴백(하위호환). 앱 2.6.0 경로 분리와 짝.
     1.1.0 - 언어 선택이 안 뜨던 문제 수정. live 노드에서 실제 송출 언어 발견.
     1.2.0 - 다국어인데도 선택 메뉴가 숨겨지던 CSS 버그 수정(inline-block).
     1.3.0 - 음성 듣기(2단계): "음성 듣기" 탭 → 자기 언어의 audioLive/{lang} 클립을
@@ -21,10 +25,17 @@
             ※ Storage 버킷에 CORS 설정 필요(웹에서 클립 fetch 허용).
     1.5.1 - iOS 사파리 대응: 무음 루프 <audio>로 오디오 세션을 media 채널로 유지
             (무음스위치 무시 + 컨텍스트 suspend 방지). pump에서 필요시 resume.
+    1.6.0 - 음성이 자막보다 뒤처지는 문제 개선: 큐에 클립이 밀려 쌓이면 오래된 건 버리고
+            가장 최근 클립으로 점프 재생. 음성 듣기 시작 시 최신 문장부터 따라감.
+    1.7.0 - 지연 추가 차단: fetch/decode 하는 사이 새 클립이 들어오면 방금 디코드한 건 버리고
+            최신으로 다시 시작. 점프 시 예약된 옛 음성 즉시 중지. (피치 유지 위해 속도는 1.0 고정)
+    1.8.0 - (롤백됨) 재생 속도 5% 증가를 시도했으나 톤이 어색해 1.7.1에서 1.0으로 되돌림.
+    1.7.1 - 재생 속도 1.0(정상)으로 복귀. PLAYBACK_RATE 상수만 남겨 필요 시 조정 가능.
+            지연 따라잡기는 점프 로직(1.6.0/1.7.0)으로만 처리.
   ─────────────────────────────────────────────
-  · QR 링크 형식:  https://dororokrealtimespeech.web.app/sub.html?s=<세션ID>
-  · 읽는 데이터(Realtime Database) 구조:
-      /sessions/{세션ID}/meta = {
+  · QR 링크 형식:  https://dororokrealtimespeech.web.app/sub.html?u=<호스트UID>&s=<세션ID>
+  · 읽는 데이터(Realtime Database) 구조: (u 없으면 sessions/{세션ID}로 폴백)
+      /sessions/{호스트UID}/{세션ID}/meta = {
           eventName, sessionName, logoUrl,
           mode: "single" | "multi",
           langs: { "ja": "Japanese (日本語)", "zh-Hans": "Chinese, Simplified (简体)", ... },
@@ -40,6 +51,8 @@
     --ink:#16181d; --muted:#9aa0a6; --soft:#5b6066;
     --live:#d64545; --accent:#1f6f6a;
     --sub:1.9rem;            /* 자막 크기(스크립트로 조절) */
+    --subw:450;              /* 자막 굵기(스크립트로 조절) */
+    --subwc:600;             /* 진행중(현재) 줄 굵기 */
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
   html,body{margin:0; height:100%;}
@@ -76,11 +89,11 @@
     scroll-behavior:smooth;
   }
   .lines{
-    font-size:var(--sub); line-height:1.5; font-weight:450;
+    font-size:var(--sub); line-height:1.5; font-weight:var(--subw);
     word-break:break-word; max-width:46rem; margin:0 auto;
   }
-  .lines .fin{color:var(--soft); margin:0 0 .55em;}
-  .lines .cur{color:var(--ink); font-weight:600; margin:0;}
+  .lines .fin{color:var(--soft); font-weight:var(--subw); margin:0 0 .55em;}
+  .lines .cur{color:var(--ink); font-weight:var(--subwc); margin:0;}
 
   /* 상태 안내 (대기/빈/오류) */
   .state{
@@ -116,6 +129,21 @@
   footer button.audio[disabled]:active{background:#f7f7f7;}
   footer button.audio.on{background:var(--accent); color:#fff; border-color:var(--accent);}
   #langSel{display:none;}
+
+  /* v1.10.0: '친구에게 QR 보여주기' 모달 */
+  .qrmodal{
+    position:fixed; inset:0; z-index:50; display:none;
+    background:rgba(0,0,0,.78); flex-direction:column; align-items:center; justify-content:center;
+    gap:18px; padding:24px;
+  }
+  .qrmodal.on{display:flex;}
+  .qrmodal .card{background:#fff; border-radius:18px; padding:24px 24px 20px; text-align:center; max-width:90vw;}
+  .qrmodal canvas{width:min(72vw,300px); height:auto; image-rendering:pixelated;}
+  .qrmodal .qt{font-size:1.05rem; font-weight:700; color:var(--ink); margin:0 0 14px;}
+  .qrmodal .qs{font-size:.78rem; color:var(--muted); margin:12px 0 0; word-break:break-all;}
+  .qrmodal .close{margin-top:4px; border:1px solid #ccc; background:#fff; color:#fff;
+    border-radius:10px; padding:11px 26px; font:inherit; font-size:.92rem; cursor:pointer;
+    background:rgba(255,255,255,.16); border-color:rgba(255,255,255,.5);}
 </style>
 </head>
 <body>
@@ -142,14 +170,30 @@
       <button id="smaller" aria-label="Smaller text">A−</button>
       <button id="bigger" aria-label="Bigger text">A+</button>
     </div>
+    <div class="size">
+      <button id="thinner" aria-label="Thinner text" title="글자 가늘게">B−</button>
+      <button id="bolder" aria-label="Bolder text" title="글자 굵게">B+</button>
+    </div>
+    <button id="shareBtn" title="친구에게 QR 보여주기">📱 친구 QR</button>
     <div class="spacer"></div>
     <button class="audio" id="audioBtn" title="번역 음성 듣기">🔊 음성 듣기</button>
     <button id="saveBtn">⬇ Save</button>
   </footer>
 
+  <!-- v1.10.0: 친구에게 QR 보여주기 모달 -->
+  <div class="qrmodal" id="qrmodal">
+    <div class="card">
+      <p class="qt">이 QR을 친구에게 보여주세요<br><span style="font-weight:400;font-size:.82rem;color:#9aa0a6">Show this QR to a friend</span></p>
+      <canvas id="qrcanvas"></canvas>
+      <p class="qs" id="qrurl"></p>
+    </div>
+    <button class="close" id="qrclose">닫기 · Close</button>
+  </div>
+
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getDatabase, ref, onValue, off, get, query, limitToLast, onChildAdded } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+import QRCode from "https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm";   // v1.10.0: 친구 QR 생성
 
 const firebaseConfig = {
   apiKey: "AIzaSyDFJUlehacd5sMAhr5MDkyFIgNXUCjdGAk",
@@ -165,7 +209,11 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
-const sid = new URLSearchParams(location.search).get("s");
+const params = new URLSearchParams(location.search);
+const sid = params.get("s");
+const uid = params.get("u");   // v1.9.0: 멀티유저 — 호스트 UID
+// 자막 경로 루트: uid 있으면 sessions/{uid}/{sid}, 없으면(구버전 QR) sessions/{sid}
+const base = uid ? `sessions/${uid}/${sid}` : `sessions/${sid}`;
 
 const $ = (id) => document.getElementById(id);
 const mainEl = $("main"), evEl = $("ev"), seEl = $("se"), logoEl = $("logo");
@@ -179,6 +227,7 @@ let liveRef = null;
 let buf = { lines: [], current: "" };
 
 // ── 음성 재생 상태 ──
+const PLAYBACK_RATE = 1.0;  // 정상 속도(피치/톤 자연스러움). 1.05 등으로 올리면 빨리 따라가지만 톤이 어색해짐.
 let audioOn = false;
 let audioCtx = null;        // Web Audio 컨텍스트 (클립을 샘플 단위로 이어붙임 → 무결한 재생)
 let nextStartTime = 0;      // 다음 클립을 시작할 컨텍스트 시각(초)
@@ -207,6 +256,31 @@ function applySub(){ document.documentElement.style.setProperty("--sub", sub + "
 $("bigger").onclick = () => { sub = Math.min(sub + 0.2, 3.4); applySub(); localStorage.setItem("bmg_sub", sub); };
 $("smaller").onclick = () => { sub = Math.max(sub - 0.2, 1.1); applySub(); localStorage.setItem("bmg_sub", sub); };
 
+// ── 자막 글자 굵기 (기억) ── v1.10.0
+let subw = parseInt(localStorage.getItem("bmg_subw")) || 450;
+applyWeight();
+function applyWeight(){
+  document.documentElement.style.setProperty("--subw", subw);
+  document.documentElement.style.setProperty("--subwc", Math.min(subw + 150, 900));
+}
+$("bolder").onclick  = () => { subw = Math.min(subw + 100, 800); applyWeight(); localStorage.setItem("bmg_subw", subw); };
+$("thinner").onclick = () => { subw = Math.max(subw - 100, 200); applyWeight(); localStorage.setItem("bmg_subw", subw); };
+
+// ── 친구에게 QR 보여주기 ── v1.10.0
+// 지금 보고 있는 페이지 주소(?u=&s=)를 QR로 만들어 화면에 띄움 → 옆 사람이 스캔해 입장.
+const qrmodal = $("qrmodal");
+$("shareBtn").onclick = async () => {
+  try {
+    await QRCode.toCanvas($("qrcanvas"), location.href, { width: 300, margin: 1 });
+    $("qrurl").textContent = location.href;
+    qrmodal.classList.add("on");
+  } catch (e) {
+    alert("QR 생성에 실패했습니다. 인터넷 연결을 확인해주세요.");
+  }
+};
+$("qrclose").onclick = () => qrmodal.classList.remove("on");
+qrmodal.onclick = (e) => { if (e.target === qrmodal) qrmodal.classList.remove("on"); };
+
 function showState(big, small, spin){
   mainEl.innerHTML = '<div class="state">' +
     (spin ? '<div class="spin"></div>' : '') +
@@ -222,7 +296,7 @@ if (!sid) {
 }
 
 function start(){
-  onValue(ref(db, `sessions/${sid}/meta`), (snap) => {
+  onValue(ref(db, `${base}/meta`), (snap) => {
     meta = snap.val();
     if (!meta) {
       liveBadge.classList.remove("on");
@@ -252,7 +326,7 @@ async function setupLangs(){
   // 2) 안전망: 실제 송출 중인 언어를 live 노드에서 직접 발견
   //    (meta.mode가 잘못 기록됐거나 meta.langs가 비어 있어도 선택이 뜨도록)
   try {
-    const snap = await get(ref(db, `sessions/${sid}/live`));
+    const snap = await get(ref(db, `${base}/live`));
     const liveVal = snap.val();
     if (liveVal && typeof liveVal === "object") {
       for (const c of Object.keys(liveVal)) {
@@ -290,7 +364,7 @@ function subscribeLive(){
   buf = { lines: [], current: "" };
   showState("자막을 기다리는 중…", "Waiting for subtitles…", true);
 
-  liveRef = ref(db, `sessions/${sid}/live/${currentLang}`);
+  liveRef = ref(db, `${base}/live/${currentLang}`);
   onValue(liveRef, (snap) => {
     const v = snap.val();
     if (!v){ buf = { lines: [], current: "" }; renderLines(); return; }
@@ -365,7 +439,7 @@ async function subscribeAudio(){
   if (audioUnsub){ try { audioUnsub(); } catch(e){} audioUnsub = null; }
   clipQueue = [];
   stopAllSources();
-  const aref = ref(db, `sessions/${sid}/audioLive/${currentLang}`);
+  const aref = ref(db, `${base}/audioLive/${currentLang}`);
   // 켠 시점의 마지막 seq를 기준선으로 → 그 이후 문장부터 재생 (기기 시계와 무관)
   audioBaseline = 0;
   try {
@@ -393,10 +467,18 @@ function decode(arr){
 
 // 큐의 클립을 순서대로 받아 디코드 후, 컨텍스트 시각에 '이어붙여' 예약 재생.
 // 클립 사이 틈 없이 한 음성처럼 들림.
+// v1.6.0: 큐가 밀리면(여러 클립이 쌓이면) 오래된 클립은 버리고 가장 최근 것부터 재생 →
+//          음성이 자막보다 한참 뒤처지지 않고 최신 문장을 따라감.
 async function pump(){
   if (pumping || !audioOn || !audioCtx) return;
   pumping = true;
   while (audioOn && clipQueue.length){
+    // 밀렸으면(대기 클립 2개 이상) 오래된 건 버리고 마지막 1개만 남김 → 최신 문장으로 점프
+    if (clipQueue.length > 1){
+      clipQueue = [clipQueue[clipQueue.length - 1]];
+      stopAllSources();                              // v1.7.0: 예약된 옛 음성 중지
+      nextStartTime = audioCtx.currentTime + 0.05;   // 즉시 재생
+    }
     const url = clipQueue.shift();
     try {
       if (audioCtx.state === "suspended"){ try { await audioCtx.resume(); } catch(e){} }
@@ -404,14 +486,24 @@ async function pump(){
       const arr = await resp.arrayBuffer();
       const buf = await decode(arr);
       if (!audioOn) break;
+      // v1.7.0: fetch/decode 하는 사이 새 클립이 들어왔으면, 방금 디코드한 건 버리고 최신으로 다시.
+      //         (디코드 지연만큼 뒤처지는 것을 막아 음성이 자막을 바짝 따라감)
+      if (clipQueue.length){
+        stopAllSources();
+        nextStartTime = audioCtx.currentTime + 0.05;
+        continue;   // 루프 처음으로 → 최신 클립 처리
+      }
       const now = audioCtx.currentTime;
       // 밀렸으면(예약 시각이 지났으면) 지금 살짝 뒤부터, 아니면 직전 클립 끝에 바로 이어서
       if (nextStartTime < now + 0.08) nextStartTime = now + 0.08;
       const src = audioCtx.createBufferSource();
       src.buffer = buf;
+      // v1.8.0: 재생 속도 5% 증가 → 음성이 자막을 더 빨리 따라감(피치 변화는 거의 체감 안 됨).
+      src.playbackRate.value = PLAYBACK_RATE;
       src.connect(audioCtx.destination);
       src.start(nextStartTime);
-      nextStartTime += buf.duration;
+      // 속도를 올리면 클립이 그만큼 짧게 끝나므로 다음 시작 시각도 실제 재생 길이로 계산
+      nextStartTime += buf.duration / PLAYBACK_RATE;
       liveSources.push(src);
       src.onended = () => { const i = liveSources.indexOf(src); if (i >= 0) liveSources.splice(i, 1); };
     } catch(e){ /* CORS/디코드 실패 → 이 클립만 건너뜀 */ }

@@ -2,8 +2,11 @@
 //  ContentView.swift
 //  BoothmateG
 //
-//  Version: 2.87.0
+//  Version: 2.89.0
 //  Changelog:
+//    2.89.0 - 우측 하단 로그인 표시 형식을 "'{이메일}'으로 로그인됨"으로 변경(이메일을 작은따옴표로 강조).
+//    2.88.0 - 하단 "호스트"/"로그인" 버튼을 우측 하단으로 이동 + 로그인 시 "{이메일}으로 로그인 됨" 표시
+//             (로그인된 계정을 한눈에 확인. 클릭 시 로그인/로그아웃 창은 그대로). 멀티유저 대비.
 //    2.87.0 - 상단 라벨 "번역 언어" → "번역 언어 선택", 언어 선택 버튼의 "변경" 표기 → "리스트"로 변경(빈 상태는 "선택" 유지).
 //    2.86.0 - 헤더 로고 아래에 앱 버전 표기("Ver. 1.0") 추가. 로고를 VStack으로 감싸 하단에 작은 회색 텍스트로 표시.
 //    2.85.0 - 행사정보 창에 중간 저장 연결(onSave). 저장 눌러도 창 유지·즉시 영구저장.
@@ -1150,14 +1153,7 @@ struct ContentView: View {
                     .buttonStyle(.bordered).controlSize(.large)
                     .disabled(broadcastSessionId.isEmpty)
 
-                    Button { showHostLogin = true } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: relay.authReady ? "checkmark.seal.fill" : "person.crop.circle.badge.exclamationmark")
-                            Text(relay.authReady ? "호스트" : "로그인")
-                        }.font(.body)
-                    }
-                    .buttonStyle(.bordered).controlSize(.large)
-                    .tint(relay.authReady ? .green : .orange)
+                    // v2.88.0: 호스트 로그인 버튼은 우측 하단(statusMessage 옆)으로 이동함
 
                     Button {
                         broadcasting.toggle()
@@ -1180,6 +1176,17 @@ struct ContentView: View {
                     Spacer()
 
                     Text(statusMessage).font(.callout).foregroundStyle(.secondary)
+
+                    // v2.88.0: 로그인 상태를 우측 하단에 표시. 로그인 시 "{이메일}으로 로그인 됨".
+                    // 클릭하면 로그인/로그아웃 창(HostLoginView)이 열림.
+                    Button { showHostLogin = true } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: relay.authReady ? "checkmark.seal.fill" : "person.crop.circle.badge.exclamationmark")
+                            Text(relay.authReady ? "'\(relay.authEmail)'으로 로그인됨" : "로그인")
+                        }.font(.callout)
+                    }
+                    .buttonStyle(.bordered).controlSize(.large)
+                    .tint(relay.authReady ? .green : .orange)
                 }
             }
         }
