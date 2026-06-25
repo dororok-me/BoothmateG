@@ -347,7 +347,7 @@ struct ContentView: View {
                     .scaledToFit()
                     .frame(height: 84)
                     .clipShape(RoundedRectangle(cornerRadius: 16))
-                Text("Ver. 1.0")
+                Text("Ver. 1.0.3")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
             }
