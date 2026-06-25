@@ -2,8 +2,9 @@
 //  ContentView.swift
 //  BoothmateG
 //
-//  Version: 2.93.0
+//  Version: 2.94.0
 //  Changelog:
+//    2.94.0 - 헤더 앱 버전 표기 "Ver. 1.0" → "Ver. 1.0.3".
 //    2.93.0 - [환율 변환 다국어 적용] 다국어 청중 송출(relayMulti)을 glossary.normalize → polish로 통일.
 //             단일 모드(relaySingle)처럼 환율 변환 포함. 다국어 모드에서 환율 변환이 안 되던 문제 해결(청중).
 //    2.92.0 - 줄바꿈 보호용으로 행사정보를 GlossaryEngine에 동기화(setEventInfo). 등록 용어·직책을 한 단위로.
