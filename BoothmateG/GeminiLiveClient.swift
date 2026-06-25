@@ -2,8 +2,12 @@
 //  GeminiLiveClient.swift
 //  BoothmateG
 //
-//  Version: 1.8.1
+//  Version: 1.9.1
 //  Changelog:
+//    1.9.1 - 연사 표기 어순을 "직책 + 이름"(예: Director JO Hyun Jin)으로 고정 지시 추가.
+//            "JO Hyun Jin, Director"처럼 이름을 앞세우지 않도록 명시.
+//    1.9.0 - 행사정보 지시문(generateEventInstruction) 강화: 연사 직책을 등록 영문 그대로 쓰고
+//            의역·생략 금지, 이름 언급 시 직책을 함께 붙여 표기하도록 명시. 직책이 자막에 잘 안 나오던 문제 완화.
 //    1.8.1 - echoTargetLanguage false→true 테스트. 입력이 목표 언어일 때 침묵 대신 처리 →
 //            영한/한영 자동 감지로 인한 언어 혼입 완화 시도. (효과 없으면 false로 되돌림)
 //    1.8.0 - 기본 번역 규칙을 항상 주입(글로서리·행사정보 없어도). 실시간 스트리밍 번역에서
@@ -384,9 +388,16 @@ final class GeminiLiveClient: NSObject {
         }
         
         instruction += """
-        위의 용어들은 번역 시 정확히 사용하시오.
+        위 용어는 번역 시 반드시 정확히 사용하시오.
+
+        [연사 호명 규칙 — 매우 중요]
+        · 연사의 직책은 위에 등록된 영문 표기를 그대로 사용하고, 절대 다른 말로 의역하거나 생략하지 마시오.
+          (예: 등록된 직책이 "Director"이면 Secretary-General, Head 등으로 바꾸지 말고 항상 "Director"로 표기.)
+        · 연사의 이름이 언급되면 직책을 이름 "앞"에 두어 "직책 + 이름" 순서로 표기하시오.
+          반드시 "Director JO Hyun Jin"처럼 직책을 먼저 쓰고, "JO Hyun Jin, Director"처럼 이름을 앞세우거나 콤마로 뒤에 붙이지 마시오.
+        · 이름의 철자는 등록된 영문 표기를 정확히 따르시오.
         """
-        
+
         return instruction
     }
 }

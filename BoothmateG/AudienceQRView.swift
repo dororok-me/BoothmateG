@@ -2,8 +2,10 @@
 //  AudienceQRView.swift
 //  BoothmateG
 //
-//  Version: 2.3.0
+//  Version: 2.4.0
 //  Changelog:
+//    2.4.0 - 청중 QR 링크 주소를 커스텀 도메인 https://qr.boothmate.co.kr/sub.html 로 변경.
+//            (기존 dororokrealtimespeech.web.app도 같은 사이트라 이전 QR도 계속 작동.)
 //    2.3.0 - [멀티유저] QR 링크에 로그인 UID 포함(?u={uid}&s={sid}). 청중 페이지가 sessions/{uid}/{sid}를
 //            읽도록 함. FirebaseRelay 2.6.0 경로 분리와 짝. (로그인 안 했으면 uid 빈 값 → 링크 무효)
 //    2.2.0 - 파인더 cornerWidth/Height 극대화(2.1→2.8)로 완전히 둥글게(거의 원형).
@@ -32,7 +34,7 @@ import CoreImage.CIFilterBuiltins
 
 // 청중 페이지 주소 (Firebase Hosting에 올릴 sub.html). 본인 도메인으로 수정하세요.
 enum AudienceConfig {
-    static let baseURL = "https://dororokrealtimespeech.web.app/sub.html"
+    static let baseURL = "https://qr.boothmate.co.kr/sub.html"
     // v2.3.0: 멀티유저 — 호스트 UID를 링크에 포함(?u=uid&s=sid). uid는 호출 시점의 로그인 사용자.
     static func link(_ sessionID: String, uid: String = FirebaseRelay.shared.authUID) -> String {
         "\(baseURL)?u=\(uid)&s=\(sessionID)"
