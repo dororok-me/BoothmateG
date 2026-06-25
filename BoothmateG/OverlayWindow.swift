@@ -2,8 +2,13 @@
 //  OverlayWindow.swift
 //  BoothmateG
 //
-//  Version: 1.36.0
+//  Version: 1.37.0
 //  Changelog:
+//    1.39.0 - [확실 수정] 확정 자막을 단어 토큰별로 그리고 각 단어를 가로 고정(fixedSize)해 줄 끝에서
+//             단어(H.E. 등)가 쪼개지지 않게 함. nbsp로 묶인 등록 구절도 한 토큰 유지. (KaraokeFlowLayout 재사용)
+//    1.38.0 - (무효) 약어 마침표 뒤 word joiner(U+2060) 시도 — SwiftUI가 무시해 효과 없었음.
+//    1.37.0 - 등록된 용어집·직책(다단어)을 한 단위로 묶어(nbsp) 워드랩이 중간에서 끊지 않게 함
+//             (확정·진행 자막). glossary.protectedPhrases() 사용. 줄바꿈(\n)도 공백으로 정리.
 //    1.36.0 - 진행 중(카라오케) 실시간 자막에도 커스텀 글꼴 적용. KaraokeCurrentLine에 fontPSName 전달.
 //    1.35.0 - 행사용 커스텀 글꼴 적용(번역 자막·원문). 오버레이 설정에 '글꼴' 선택 행 추가
 //             (CustomFont로 .ttf/.otf 선택·런타임 등록). 미지정 시 기존 시스템 폰트 유지.
@@ -533,7 +538,7 @@ struct OverlayContentView: View {
                                     //   페이드+슬라이드되며 부드럽게 등장(실시간 단어 표출은 유지, "툭 박힘" 제거).
                                     //   카라오케는 표시 전용이라 더블클릭 편집은 확정 자막에서만 동작.
                                     KaraokeCurrentLine(
-                                        text: (displayPolish ?? glossary.normalize)(store.currentTarget),
+                                        text: protectPhrases((displayPolish ?? glossary.normalize)(store.currentTarget)),
                                         fontSize: fontSize,
                                         bold: fontBold,
                                         color: Color(hex: fontColorHex),
@@ -667,6 +672,18 @@ struct OverlayContentView: View {
                            : .custom(fontPSName, size: size)
     }
 
+    // v1.37.0: 등록된 용어·직책(다단어 구절)을 한 단위로 묶어 워드랩이 중간에서 끊지 않게(nbsp).
+    //          줄바꿈(\n)도 공백으로 정리. 보호 구절은 glossary.protectedPhrases()(용어집+행사정보).
+    private func protectPhrases(_ s: String) -> String {
+        var r = s.replacingOccurrences(of: "\n", with: " ")
+        // 등록된 다단어 구절(용어·직책)의 공백을 nbsp로 묶어 한 토큰으로 유지(단어 분리 시 안 쪼개짐)
+        for phrase in glossary.protectedPhrases() {
+            let nb = phrase.replacingOccurrences(of: " ", with: "\u{00A0}")
+            r = r.replacingOccurrences(of: phrase, with: nb)
+        }
+        return r
+    }
+
     // ── 자막 한 줄 ──
     @ViewBuilder
     private func overlayRow(_ seg: SubtitleSegment) -> some View {
@@ -696,21 +713,28 @@ struct OverlayContentView: View {
                 .cornerRadius(4)
                 .onExitCommand { editingID = nil }
             } else {
-                // 글로서리 적용된 텍스트를 표시 (저장소 원본은 그대로 유지)
-                Text(spacedAttr((displayPolish ?? glossary.normalize)(seg.targetText)))
-                    .font(subtitleFont(fontSize, bold: fontBold))
-                    .foregroundColor(Color(hex: fontColorHex))
-                    .modifier(StrokeModifier(enabled: textStroke, colorHex: strokeColorHex, width: 1.0, blur: strokeBlur))
-                    .lineSpacing(textLineSpacing)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, innerMargin)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        editingID = seg.id
-                        // 수정 진입 시에도 글로서리 교정본을 보여줌
-                        editText = glossary.normalize(seg.targetText)
+                // v1.39.0: 단어 토큰별로 그리고 각 단어를 가로 고정 → 줄 끝에서 단어(H.E. 등)가 안 쪼개짐.
+                //          nbsp로 묶인 등록 구절(직책·용어)도 한 토큰으로 유지됨.
+                let shown = protectPhrases((displayPolish ?? glossary.normalize)(seg.targetText))
+                KaraokeFlowLayout(spacing: CGFloat(wordSpacing), lineSpacing: textLineSpacing) {
+                    ForEach(Array(shown.split(separator: " ", omittingEmptySubsequences: true).enumerated()),
+                            id: \.offset) { _, w in
+                        Text(String(w) + " ")
+                            .font(subtitleFont(fontSize, bold: fontBold))
+                            .foregroundColor(Color(hex: fontColorHex))
+                            .modifier(StrokeModifier(enabled: textStroke, colorHex: strokeColorHex, width: 1.0, blur: strokeBlur))
+                            .fixedSize(horizontal: true, vertical: false)
                     }
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, innerMargin)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    editingID = seg.id
+                    // 수정 진입 시에도 글로서리 교정본을 보여줌
+                    editText = glossary.normalize(seg.targetText)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -980,6 +1004,7 @@ struct KaraokeCurrentLine: View {
                                              : .custom(fontPSName, size: fontSize))
                     .foregroundColor(color)
                     .modifier(StrokeModifier(enabled: stroke, colorHex: strokeColorHex, width: 1.0, blur: strokeBlur))
+                    .fixedSize(horizontal: true, vertical: false)   // v1.39.0: 단어(H.E. 등) 줄 끝에서 안 쪼개짐
                     .transition(.asymmetric(
                         insertion: .opacity.combined(with: .offset(x: -fontSize * 0.5)),
                         removal: .opacity))

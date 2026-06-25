@@ -2,8 +2,10 @@
 //  MultiSeparateOverlayController.swift
 //  BoothmateG
 //
-//  Version: 1.5.0
+//  Version: 1.6.0
 //  Changelog:
+//    1.6.0 - [환율 변환] 언어별 분리 오버레이에 displayPolish 전달 → 환율 변환 적용(그동안 nil이라 미적용).
+//            용어집은 syncLang의 normalize로 적용됐으나 환율만 빠져 있던 것. toggleLang/showLang에 인자 추가.
 //    1.5.0 - [한 줄기 흐름 + 마침표 확정] 오버레이가 메인 콘솔의 끊김을 무시하고, 확정+진행 번역을 모두
 //            이어붙여 한 줄기로 만든 뒤 마침표로 끝난 문장만 확정 줄(위 고정), 미완성 꼬리는 진행 줄로 보낸다.
 //            확정 줄이 재배치되던 현상("3대의"가 떴다 합쳐짐) 제거. 확정 문장 목록이 바뀔 때만 교체(깜빡임 방지).
@@ -86,13 +88,13 @@ final class MultiSeparateOverlayController {
     }
 
     // 특정 언어 창만 켜고 끄기
-    func toggleLang(_ lang: String, store: MultiSubtitleStore, glossary: GlossaryEngine, pairEngine: GlossaryPairEngine, mainWindow: NSWindow?) {
+    func toggleLang(_ lang: String, store: MultiSubtitleStore, glossary: GlossaryEngine, pairEngine: GlossaryPairEngine, mainWindow: NSWindow?, displayPolish: ((String) -> String)? = nil) {
         if isVisible(lang: lang) { hideLang(lang) }
-        else { showLang(lang, store: store, glossary: glossary, pairEngine: pairEngine, mainWindow: mainWindow) }
+        else { showLang(lang, store: store, glossary: glossary, pairEngine: pairEngine, mainWindow: mainWindow, displayPolish: displayPolish) }
     }
 
     // 특정 언어 창만 표시
-    func showLang(_ lang: String, store: MultiSubtitleStore, glossary: GlossaryEngine, pairEngine: GlossaryPairEngine, mainWindow: NSWindow?) {
+    func showLang(_ lang: String, store: MultiSubtitleStore, glossary: GlossaryEngine, pairEngine: GlossaryPairEngine, mainWindow: NSWindow?, displayPolish: ((String) -> String)? = nil) {
         guard store.langs.contains(lang) else { return }
         self.multiStore = store
         self.glossary = glossary
@@ -106,7 +108,7 @@ final class MultiSeparateOverlayController {
         let st = stores[lang] ?? SubtitleStore()
         stores[lang] = st
         syncLang(lang)
-        ctrl.show(store: st, glossary: glossary, mainWindow: mainWindow, displayPolish: nil)
+        ctrl.show(store: st, glossary: glossary, mainWindow: mainWindow, displayPolish: displayPolish)
 
         // 관찰이 아직 없으면(첫 창) 1회 설정
         if cancellables.isEmpty { observeMultiStore(store) }

@@ -2,8 +2,10 @@
 //  SubtitleStore.swift
 //  BoothmateG
 //
-//  Version: 1.7.0
+//  Version: 1.8.0
 //  Changelog:
+//    1.8.0 - 약어 마침표에서 줄이 끊기던 문제 수정. "H.E."(His Excellency)·"U.S."·"Dr." 등
+//            약어의 마침표를 문장 끝으로 오인해 줄바꿈하던 것을 보류(endsWithAbbreviation).
 //    1.1.0 - turnComplete 기반 (Gemini가 turnComplete를 거의 안 보내서 실패)
 //    1.2.0 - 번역 텍스트의 마침표(.?!) 도착 시 자동으로 segment 확정
 //    1.3.0 - updateSource() 추가 (원문 줄도 수정 가능)
@@ -62,7 +64,21 @@ final class SubtitleStore: ObservableObject {
         // v1.7.0: 수정 중이면 자동 확정 보류 (수정 자막 중복 방지). 백그라운드는 current에 계속 누적.
         guard !editingHold else { return }
         guard let last = currentTarget.last, sentenceEnders.contains(last) else { return }
+        // v1.8.0: 마침표(.)로 끝나되 약어(H.E., U.S., Dr. 등)면 확정 보류 → 약어 마침표에서 줄이 안 끊김
+        if last == "." && endsWithAbbreviation(currentTarget) { return }
         flush()
+    }
+
+    // v1.8.0: 마지막 토큰이 약어 마침표인지 판단 (문장 종결 오인 방지)
+    private func endsWithAbbreviation(_ s: String) -> Bool {
+        let t = s.trimmingCharacters(in: .whitespaces)
+        // 1) 끝이 단일 알파벳+마침표 반복 형태 (H. / H.E. / U.S. / e.g.)
+        if t.range(of: "(?:\\b[A-Za-z]\\.)+$", options: .regularExpression) != nil { return true }
+        // 2) 흔한 약어 목록 (소문자 비교)
+        let abbrevs = ["mr.", "mrs.", "ms.", "dr.", "prof.", "st.", "ave.", "inc.", "ltd.",
+                       "jr.", "sr.", "vs.", "etc.", "no.", "ph.d.", "m.d.", "rep.", "sen.", "gov."]
+        let lower = t.lowercased()
+        return abbrevs.contains { lower.hasSuffix($0) }
     }
 
     // 현재 진행 중인 자막을 segment로 확정

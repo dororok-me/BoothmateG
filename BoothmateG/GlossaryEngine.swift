@@ -2,8 +2,11 @@
 //  GlossaryEngine.swift
 //  BoothmateG
 //
-//  Version: 1.5.0
+//  Version: 1.6.0
 //  Changelog:
+//    1.6.0 - 자막 줄바꿈 보호용 protectedPhrases() 추가: 용어집·행사정보(직책·이름·행사명 등)에
+//            등록된 다단어 표기 목록 반환. 오버레이가 이 구절들을 한 단위로 묶어(nbsp) 워드랩이
+//            중간에서 끊지 않게 함. setEventInfo로 행사정보 주입.
 //    1.0.0 - 최초 작성. 번역 텍스트에 용어집 항목을 치환
 //    1.1.0 - normalize() 추가: 콤마 별칭 + 양방향. 각 칸 첫 단어를 대표 표기로 통일
 //    1.3.0 - 제거 항목 지원: source/target이 콤마로 시작하면(표준 빈칸) 그 별칭들을
@@ -30,10 +33,39 @@ final class GlossaryEngine {
     // v1.5.0: 여러 세션이 동시에 호출하면 items의 String 버퍼를 동시 복사하다 충돌 → 한 번에 한 스레드만.
     private let lock = NSLock()
 
+    // v1.6.0: 줄바꿈 보호 구절 산출용으로 행사정보 보관
+    private var protectEvent = EventInfo()
+
     // 용어집 항목 갱신
     func update(items: [GlossaryItem]) {
         lock.lock(); defer { lock.unlock() }   // v1.5.0
         self.items = items.sorted { $0.source.count > $1.source.count }
+    }
+
+    // v1.6.0: 줄바꿈 보호용 행사정보 주입
+    func setEventInfo(_ e: EventInfo) {
+        lock.lock(); defer { lock.unlock() }
+        protectEvent = e
+    }
+
+    // v1.6.0: 한 단위로 묶어 보호할(워드랩 금지) 다단어 구절 목록.
+    //         용어집(source/target 별칭) + 행사정보(직책·이름·행사명·장소). 공백 포함만, 긴 것 우선.
+    func protectedPhrases() -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        var out: [String] = []
+        for item in items {
+            out.append(contentsOf: splitAliases(item.source))
+            out.append(contentsOf: splitAliases(item.target))
+        }
+        for sp in protectEvent.speakers {
+            out.append(sp.position.ko); out.append(sp.position.en)
+            out.append(sp.name.ko);     out.append(sp.name.en)
+        }
+        out.append(protectEvent.eventName.ko); out.append(protectEvent.eventName.en)
+        out.append(protectEvent.venue.ko);     out.append(protectEvent.venue.en)
+        let uniq = Array(Set(out.map { $0.trimmingCharacters(in: .whitespaces) }
+                             .filter { $0.contains(" ") }))
+        return uniq.sorted { $0.count > $1.count }   // 긴 구절 먼저(부분 겹침 시 우선 치환)
     }
 
     // (구버전) 단순 치환 — 호환용으로 남겨둠. 현재 표시 경로는 normalize() 사용.

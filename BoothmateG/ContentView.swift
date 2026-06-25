@@ -2,8 +2,11 @@
 //  ContentView.swift
 //  BoothmateG
 //
-//  Version: 2.91.0
+//  Version: 2.93.0
 //  Changelog:
+//    2.93.0 - [환율 변환 다국어 적용] 다국어 청중 송출(relayMulti)을 glossary.normalize → polish로 통일.
+//             단일 모드(relaySingle)처럼 환율 변환 포함. 다국어 모드에서 환율 변환이 안 되던 문제 해결(청중).
+//    2.92.0 - 줄바꿈 보호용으로 행사정보를 GlossaryEngine에 동기화(setEventInfo). 등록 용어·직책을 한 단위로.
 //    2.91.0 - 송출 시작 시 오버레이 행사용 글꼴(ov_fontFile)을 청중에게도 업로드(startBroadcast fontPath).
 //    2.90.0 - 앱 시작(onAppear) 시 저장된 행사용 글꼴 재등록(CustomFont.register) — 오버레이 커스텀 글꼴 유지.
 //    2.89.0 - 우측 하단 로그인 표시 형식을 "'{이메일}'으로 로그인됨"으로 변경(이메일을 작은따옴표로 강조).
@@ -278,7 +281,9 @@ struct ContentView: View {
             eventInfo = settings.loadEventInfo()   // v2.84.0: 행사정보 영구저장본 불러오기
             // v2.90.0: 저장된 행사용 글꼴 재등록(런타임 등록은 앱 재시작 시 사라지므로)
             CustomFont.register(path: UserDefaults.standard.string(forKey: "ov_fontFile") ?? "")
+            glossary.setEventInfo(eventInfo)   // v2.92.0: 줄바꿈 보호 구절용 행사정보 동기화
         }
+        .onChange(of: eventInfo) { _, ev in glossary.setEventInfo(ev) }   // v2.92.0
         .onChange(of: settings.playTranslatedAudio) { _, on in
             if on && isRunning { audioPlayer.start() } else { audioPlayer.stop() }
         }
@@ -568,7 +573,8 @@ struct ContentView: View {
             Button {
                 if multiStore.langs.isEmpty { multiStore.setLanguages(audienceLangs) }
                 multiOverlay.toggleLang(code, store: multiStore, glossary: glossary,
-                                        pairEngine: pairEngine, mainWindow: NSApp.keyWindow)
+                                        pairEngine: pairEngine, mainWindow: NSApp.keyWindow,
+                                        displayPolish: { polish($0) })   // v2.93.0: 다국어 오버레이도 환율 변환
                 if multiOverlay.isVisible(lang: code) { overlayOnLangs.insert(code) }
                 else { overlayOnLangs.remove(code) }
             } label: {
@@ -894,7 +900,8 @@ struct ContentView: View {
                 let raw = isSrc ? seg.source : (seg.targets[lang] ?? "")
                 if !raw.isEmpty {
                     let normalized = glossary.normalize(raw)
-                    let displayed = isSrc ? normalized : pairEngine.apply(source: seg.source, target: normalized)
+                    let base0 = isSrc ? normalized : pairEngine.apply(source: seg.source, target: normalized)
+                    let displayed = withCurrency(base0)   // v2.93.0: 확정 자막에도 환율 변환
                     HStack(alignment: .top, spacing: 6) {
                         Text("\(langShort(lang)):")
                             .font(.system(size: CGFloat(targetFont) * 0.7, weight: .semibold))
@@ -945,7 +952,7 @@ struct ContentView: View {
                                 .foregroundStyle(.blue.opacity(0.5))
                                 .padding(.top, 2)
                             EditableSubtitleText(
-                                text: glossary.normalize(shown),
+                                text: polish(shown),   // v2.93.0: 다국어 표시에도 환율 변환 적용
                                 fontSize: CGFloat(targetFont),
                                 bold: false,
                                 color: .secondary.opacity(0.7),
@@ -1292,6 +1299,13 @@ struct ContentView: View {
         return currencyConverter.applyConversion(to: normalized)
     }
 
+    // v2.93.0: 환율 변환만 적용(토글 ON + 정지중 아님). 다국어 확정 자막처럼 이미 정규화·후처리된
+    //          텍스트에 환율만 덧붙일 때 사용. @MainActor 안전(표시는 메인 렌더 경로).
+    private func withCurrency(_ text: String) -> String {
+        guard settings.convertUnitsCurrency, !isStopping else { return text }
+        return currencyConverter.applyConversion(to: text)
+    }
+
     // v2.61.0: 반영 로그 수집. 문장 확정 시 호출.
     //  - 용어집(파랑): 등록된 canonical/유사어가 번역문(target)에 나타나면 추정 표시
     //  - 생략어(주황): 등록된 필러 패턴이 원문(source)에 있었으면 제거된 것으로 표시
@@ -1382,10 +1396,10 @@ struct ContentView: View {
     // 다국어 모드 자막 송출 (언어 1개)
     private func relayMulti(_ lang: String) {
         guard relay.active else { return }
-        // 청중에게도 용어집 적용된 텍스트를 보냄
-        let lines = Array(multiStore.segments.compactMap { $0.targets[lang] }.map { glossary.normalize($0) }.suffix(60))
+        // v2.93.0: 청중에게도 단일 모드와 동일하게 polish 적용(용어집+블랙리스트+환율 변환)
+        let lines = Array(multiStore.segments.compactMap { $0.targets[lang] }.map { polish($0) }.suffix(60))
         relay.updateLive(lang: lang,
-                         current: glossary.normalize(multiStore.currentTargets[lang] ?? ""),
+                         current: polish(multiStore.currentTargets[lang] ?? ""),
                          lines: lines)
     }
     private func relayMultiAll() {
