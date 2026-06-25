@@ -37,4 +37,5 @@ BoothmateG는 macOS SwiftUI로 만든 실시간 통역 자막 앱입니다.
 - **STT·번역·음성 엔진**: `AudioEngine.swift`, `AudioDeviceManager.swift`, `GeminiLiveClient.swift`, `DualTranslateClient.swift`, `MultiTranslateClient.swift`, `FishAudioTTS.swift`, `TranslatedAudioPlayer.swift`, `AudioBroadcaster.swift`
 - **용어집·후처리**: `GlossaryEngine.swift`, `GlossaryPairEngine.swift`, `GlossaryView.swift`, `Glossarypairview.swift`, `Geminiglossaryhelper.swift`, `Glossaryinstructionbuilder.swift`
 - **UI·뷰**: `ConsoleSettingsView.swift`, `Eventinfoview.swift`, `HostLoginView.swift`, `InputSourceView.swift`, `AudienceLangView.swift`, `AudienceQRView.swift`
-- **보조 기능**: `CurrencyConverter.swift`, `UnitConverter.swift`, `ReflectionLog.swift`, `TranscriptArchive.swift`, `FirebaseRelay.swift` (청중용 웹 `public/sub.html`과 연동)
+- **보조 기능**: `CurrencyConverter.swift`, `UnitConverter.swift`, `ReflectionLog.swift`, `TranscriptArchive.swift`, `FirebaseRelay.swift` (청중용 웹과 연동)
+  - 청중용 웹(`sub.html`)은 **별도 레포 `dororok-me/LiveTranslate-audience`** 에서 관리·배포합니다(`~/LiveTranslate-audience`, Firebase Hosting → `qr.boothmate.co.kr`). 이 BoothmateG 레포에는 사본을 두지 않습니다(드리프트 방지).
