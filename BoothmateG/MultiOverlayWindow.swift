@@ -2,8 +2,9 @@
 //  MultiOverlayWindow.swift
 //  BoothmateG
 //
-//  Version: 6.10.0
+//  Version: 6.11.0
 //  Changelog:
+//    6.11.0 - 다국어 분리 창 자막에도 행사용 커스텀 글꼴 적용(오버레이와 같은 ov_fontPSName 공유).
 //    6.10.0 - 배경색 옵션을 폰트 색상과 동일 구성으로(흰/노랑/초록/하늘/주황/검정).
 //    6.1.0 - 상단 회색 제거
 //    6.2.0 - 옵션 패널을 상단 끝에 붙여 톱니/X를 가리게. 옵션 패널에 자체 닫기(X).
@@ -103,6 +104,8 @@ struct MultiOverlayView: View {
     var onToggleFull: () -> Void = {}
 
     @AppStorage("multi_ov_font")     private var fontSize: Double = 30
+    // v6.11.0: 오버레이와 같은 행사용 글꼴 공유(빈 값이면 시스템 폰트)
+    @AppStorage("ov_fontPSName")     private var fontPSName: String = ""
     @AppStorage("multi_ov_bgop")     private var bgOpacity: Double = 0.8
     @AppStorage("multi_ov_lines")    private var lineCount: Int = 3
     @AppStorage("multi_ov_weight")   private var weightIdx: Int = 2
@@ -253,13 +256,13 @@ struct MultiOverlayView: View {
                                         VStack(alignment: .leading, spacing: 2) {
                                             if showSourceOpt && !seg.source.isEmpty {
                                                 Text(seg.source)
-                                                    .font(.system(size: CGFloat(fontSize) * 0.62))
+                                                    .font(subFont(CGFloat(fontSize) * 0.62))
                                                     .foregroundStyle(.white.opacity(0.5))
                                                     .frame(maxWidth: .infinity, alignment: .leading)
                                                     .fixedSize(horizontal: false, vertical: true)
                                             }
                                             Text(t)
-                                                .font(.system(size: CGFloat(fontSize), weight: weightFor(weightIdx)))
+                                                .font(subFont(CGFloat(fontSize), weight: weightFor(weightIdx)))
                                                 .foregroundStyle(textColor)
                                                 .modifier(StrokeModifier(enabled: textStroke))
                                                 .lineSpacing(lineSpacingVal)
@@ -274,14 +277,14 @@ struct MultiOverlayView: View {
                                     VStack(alignment: .leading, spacing: 2) {
                                         if showSourceOpt && !store.currentSource.isEmpty {
                                             Text(store.currentSource)
-                                                .font(.system(size: CGFloat(fontSize) * 0.62))
+                                                .font(subFont(CGFloat(fontSize) * 0.62))
                                                 .foregroundStyle(.white.opacity(0.5))
                                                 .frame(maxWidth: .infinity, alignment: .leading)
                                                 .fixedSize(horizontal: false, vertical: true)
                                         }
                                         // 한 줄(문장) 기준으로 자연스럽게 줄바꿈 — 단어 나열 X
                                         Text(cur)
-                                            .font(.system(size: CGFloat(fontSize), weight: weightFor(weightIdx)))
+                                            .font(subFont(CGFloat(fontSize), weight: weightFor(weightIdx)))
                                             .foregroundStyle(textColor)
                                             .modifier(StrokeModifier(enabled: textStroke))
                                             .lineSpacing(lineSpacingVal)
@@ -320,13 +323,13 @@ struct MultiOverlayView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             if showSourceOpt && !item.src.isEmpty {
                                 Text(item.src)
-                                    .font(.system(size: CGFloat(fontSize) * 0.62))
+                                    .font(subFont(CGFloat(fontSize) * 0.62))
                                     .foregroundStyle(.white.opacity(0.5 * opacity(idx, total: items.count)))
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                             Text(item.tgt)
-                                .font(.system(size: CGFloat(fontSize), weight: weightFor(weightIdx)))
+                                .font(subFont(CGFloat(fontSize), weight: weightFor(weightIdx)))
                                 .foregroundStyle(textColor.opacity(opacity(idx, total: items.count)))
                                 .modifier(StrokeModifier(enabled: textStroke))
                                 .lineSpacing(lineSpacingVal)
@@ -537,6 +540,11 @@ struct MultiOverlayView: View {
         case 3: return .bold
         default: return .heavy
         }
+    }
+
+    // v6.11.0: 커스텀 글꼴이 지정돼 있으면 그걸로, 아니면 시스템 폰트
+    private func subFont(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        fontPSName.isEmpty ? .system(size: size, weight: weight) : .custom(fontPSName, size: size)
     }
 
     private func lines(_ lang: String) -> [String] {
