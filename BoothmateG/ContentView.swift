@@ -2,8 +2,12 @@
 //  ContentView.swift
 //  BoothmateG
 //
-//  Version: 2.94.0
+//  Version: 2.95.0
 //  Changelog:
+//    2.95.0 - [통역 지침 최우선 주입] 통역 지침(interpretGuide)을 용어집 빌더에서 분리해
+//             connect(interpretGuide:)로 직접 전달 → systemInstruction "맨 앞"에 ★최우선 강력 규칙★으로 주입
+//             (단일·다국어 공통, GeminiLiveClient v1.10.0 / Dual·Multi v1.4.0). 빌더 guide는 ""로 비워 중복 방지.
+//             통역 지침 칸으로 번역 조각화·어순·자연스러움을 직접 제어 가능.
 //    2.94.0 - 헤더 앱 버전 표기 "Ver. 1.0" → "Ver. 1.0.3".
 //    2.93.0 - [환율 변환 다국어 적용] 다국어 청중 송출(relayMulti)을 glossary.normalize → polish로 통일.
 //             단일 모드(relaySingle)처럼 환율 변환 포함. 다국어 모드에서 환율 변환이 안 되던 문제 해결(청중).
@@ -1505,13 +1509,14 @@ struct ContentView: View {
 
         // 용어집(새 방식) → systemInstruction 변환. '이 방식 사용' ON이고 등록 용어가 있으면 주입.
         // v2.83.0: '이 방식 사용' 토글 제거 → 용어집·지침·블랙리스트 항상 적용.
+        // v2.95.0: 통역 지침은 빌더에 넣지 않고(guide:"") connect로 분리 전달 → systemInstruction 맨 앞 최우선 주입.
         let glossaryInstruction: String = GlossaryInstructionBuilder.build(
             pairs: settings.loadGlossaryPairs(),
-            guide: settings.interpretGuide,
+            guide: "",
             blacklist: settings.blacklistWords)
         // 코드 후처리 엔진에도 같은 용어집 주입. AI가 놓친 음역을 교정.
         pairEngine.update(pairs: settings.loadGlossaryPairs())
-        client.connect(apiKey: settings.geminiApiKey, langA: settings.targetLang, langB: settings.sourceLang, glossaryInstruction: glossaryInstruction, eventInfo: eventInfo)
+        client.connect(apiKey: settings.geminiApiKey, langA: settings.targetLang, langB: settings.sourceLang, glossaryInstruction: glossaryInstruction, eventInfo: eventInfo, interpretGuide: settings.interpretGuide)
 
         do {
             try audio.start()
@@ -1621,13 +1626,14 @@ struct ContentView: View {
 
         // 용어집(새 방식) → systemInstruction. 다국어도 동일 주입(영↔한 쌍 기반, AI가 타 언어에도 참고).
         // v2.83.0: '이 방식 사용' 토글 제거 → 항상 적용.
+        // v2.95.0: 통역 지침은 빌더에 넣지 않고(guide:"") connect로 분리 전달 → systemInstruction 맨 앞 최우선 주입.
         let multiGlossary: String = GlossaryInstructionBuilder.build(
             pairs: settings.loadGlossaryPairs(),
-            guide: settings.interpretGuide,
+            guide: "",
             blacklist: settings.blacklistWords)
         // 다국어도 단일과 동일하게 용어집 후처리 엔진 로드(각 언어 칸에 apply 적용 위함).
         pairEngine.update(pairs: settings.loadGlossaryPairs())
-        multiClient.connect(apiKey: settings.geminiApiKey, sourceLang: settings.multiSourceLang, targets: targets, glossaryInstruction: multiGlossary, eventInfo: eventInfo)
+        multiClient.connect(apiKey: settings.geminiApiKey, sourceLang: settings.multiSourceLang, targets: targets, glossaryInstruction: multiGlossary, eventInfo: eventInfo, interpretGuide: settings.interpretGuide)
 
         do {
             try audio.start()

@@ -2,8 +2,11 @@
 //  GlossaryPairView.swift
 //  BoothmateG
 //
-//  Version: 2.5.0
+//  Version: 2.6.0
 //  Changelog:
+//    2.6.0 - 용어집 메뉴 열릴 때 빈 용어 행 1개를 맨 위에 자동 생성하고 그 입력란에 커서 자동 위치.
+//            바로 타이핑해 등록 가능. 빈 행은 저장 시 자동 제외(기존 save 필터 유지), 스냅샷 기준에
+//            포함해 '저장 안 됨' 오표시 방지.
 //    2.5.0 - '이 방식 사용' 토글 제거(항상 적용). 용어 추가를 맨 위(insert at 0)로. 용어집 검색창 추가
 //            (영어·한국어·유사어 부분 일치 필터, 결과 개수·없음 안내 표시).
 //    2.4.1 - 유사어란 안내/placeholder에 영어 별칭(음차 오인식) 등록 가능 명시.
@@ -398,8 +401,16 @@ struct GlossaryPairView: View {
         fillers = parts
             .filter { !$0.isEmpty }
             .map { FillerItem(word: $0) }
+        // v2.6.0: 메뉴 열릴 때 빈 용어 행 하나를 맨 위에 자동 생성 → 바로 입력 가능.
+        //  스냅샷 기준 설정 '전에' 추가해, 빈 행이 기준에 포함되도록(저장 안 됨 오표시 방지).
+        let blank = Draft()
+        drafts.insert(blank, at: 0)
         // 불러온 직후 = 저장된 상태 → 스냅샷 기준 설정(이때 저장 버튼 회색)
         savedSnapshot = currentSnapshot
+        // 뷰가 렌더된 뒤 커서를 빈 행의 영어 입력란에 위치(onAppear 즉시 설정은 종종 무시됨).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            focusedField = blank.id
+        }
     }
 
     // ── 저장(엔진 반영, 창은 닫지 않음) ──

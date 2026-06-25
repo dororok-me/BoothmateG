@@ -2,8 +2,13 @@
 //  GeminiLiveClient.swift
 //  BoothmateG
 //
-//  Version: 1.9.1
+//  Version: 1.10.0
 //  Changelog:
+//    1.10.0 - 통역 지침(interpretGuide)을 systemInstruction "맨 앞"에 ★최우선 강력 규칙★으로 분리 주입.
+//             connect(interpretGuide:) 파라미터 추가 → connInterpretGuide에 저장 →
+//             sendSetup에서 기본 번역 규칙·용어집·행사정보보다 먼저 배치(TOP-PRIORITY로 강조).
+//             사용자가 통역 지침 칸에 "영어 한 문장은 끊지 말고 완성된 한국어 어순 문장으로 자연스럽게 번역"
+//             같은 규칙을 넣어 번역 조각화·부자연스러움을 직접 제어할 수 있게 함.
 //    1.9.1 - 연사 표기 어순을 "직책 + 이름"(예: Director JO Hyun Jin)으로 고정 지시 추가.
 //            "JO Hyun Jin, Director"처럼 이름을 앞세우지 않도록 명시.
 //    1.9.0 - 행사정보 지시문(generateEventInstruction) 강화: 연사 직책을 등록 영문 그대로 쓰고
@@ -50,7 +55,7 @@ final class GeminiLiveClient: NSObject {
     private var webSocket: URLSessionWebSocketTask?
     private var session: URLSession!
 
-    private let model = "gemini-3.5-live-translate-preview"
+    private var model: String { let r = UserDefaults.standard.string(forKey: "remoteGeminiModel") ?? ""; return r.isEmpty ? "gemini-3.5-live-translate-preview" : r }
 
     // ── 재연결 상태 ──
     private var connApiKey = ""
@@ -70,7 +75,10 @@ final class GeminiLiveClient: NSObject {
     // ── 행사 정보 주입 (v1.7.0) ──
     private var connEventInfo = EventInfo()   // 행사 정보 저장
 
-    func connect(apiKey: String, sourceLang: String, targetLang: String, glossaryInstruction: String = "", eventInfo: EventInfo = EventInfo()) {
+    // ── 통역 지침 주입 (v1.10.0) ──
+    private var connInterpretGuide = ""       // 통역 지침(자유 서술). systemInstruction 맨 앞에 최우선으로 주입.
+
+    func connect(apiKey: String, sourceLang: String, targetLang: String, glossaryInstruction: String = "", eventInfo: EventInfo = EventInfo(), interpretGuide: String = "") {
         guard !apiKey.isEmpty else {
             onError?("API 키가 비어있습니다")
             return
@@ -81,6 +89,7 @@ final class GeminiLiveClient: NSObject {
         connTargetLang = targetLang
         connGlossaryInstruction = glossaryInstruction
         connEventInfo = eventInfo
+        connInterpretGuide = interpretGuide
         isActive = true
         isReconnecting = false
         reconnectAttempts = 0
@@ -196,6 +205,23 @@ final class GeminiLiveClient: NSObject {
         //  실시간 스트리밍 번역에서 일부 영어 구절이 번역되지 않고 그대로 남는 현상(영어 혼입) 완화.
         //  목표 언어를 명시하고, 원문 언어 단어를 하나도 남기지 말라고 강하게 지시.
         var systemText = ""
+
+        // v1.10.0: 통역 지침(interpretGuide)을 systemInstruction "맨 앞"에 최우선 강력 규칙으로 주입.
+        //  기본 번역 규칙·용어집·행사정보보다 먼저 배치해, 사용자가 통역 지침 칸에 적은 규칙
+        //  (예: "영어 한 문장은 끊지 말고 완성된 한국어 어순 문장으로 자연스럽게 번역")이
+        //  다른 어떤 지시보다 강하게 작동하도록 한다.
+        let guide = connInterpretGuide.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !guide.isEmpty {
+            systemText += """
+            ★★★ TOP-PRIORITY ABSOLUTE RULES — 최우선 강력 규칙 ★★★
+            The following standing interpretation instructions are the SINGLE most important rules. They OVERRIDE everything written below — including the default translation rules, the glossary, and the event information. Obey them above all else and never violate them:
+            \(guide)
+            ★★★ END OF TOP-PRIORITY RULES ★★★
+
+            """
+            print("[BMG] 통역 지침(최우선) systemInstruction 주입(\(guide.count)자)")
+        }
+
         let targetName = Self.languageDisplayName(connTargetLang)
         systemText += """
         You are a professional simultaneous interpreter. Translate everything you hear into \(targetName).

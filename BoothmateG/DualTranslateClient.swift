@@ -2,8 +2,9 @@
 //  DualTranslateClient.swift
 //  BoothmateG
 //
-//  Version: 1.3.0
+//  Version: 1.4.0
 //  Changelog:
+//    1.4.0 - connect(interpretGuide:) 추가 → 두 GeminiLiveClient에 통역 지침 전달(맨 앞 최우선 주입용, GeminiLiveClient v1.10.0).
 //    1.2.0 - connect(glossaryInstruction:) 추가 → 두 GeminiLiveClient에 용어집 systemInstruction 전달.
 //    1.0.0 - 최초 작성. 두 세션 동시 운용 + 감지 언어로 출력 라우팅
 //    1.1.0 - 번역 음성(onAudio) 전달 추가. 자막과 동일하게 "맞는 방향" 음성만 채택.
@@ -30,7 +31,7 @@ final class DualTranslateClient {
     private var lastSourceLang: String? = nil
     private var didNotifyConnected = false
 
-    func connect(apiKey: String, langA: String, langB: String, glossaryInstruction: String = "", eventInfo: EventInfo = EventInfo()) {
+    func connect(apiKey: String, langA: String, langB: String, glossaryInstruction: String = "", eventInfo: EventInfo = EventInfo(), interpretGuide: String = "") {
         self.langA = langA
         self.langB = langB
         self.lastSourceLang = nil
@@ -68,8 +69,8 @@ final class DualTranslateClient {
         clientB.onError = { [weak self] m in self?.onError?(m) }
         clientB.onClosed = { }
 
-        clientA.connect(apiKey: apiKey, sourceLang: langB, targetLang: langA, glossaryInstruction: glossaryInstruction, eventInfo: eventInfo)
-        clientB.connect(apiKey: apiKey, sourceLang: langA, targetLang: langB, glossaryInstruction: glossaryInstruction, eventInfo: eventInfo)
+        clientA.connect(apiKey: apiKey, sourceLang: langB, targetLang: langA, glossaryInstruction: glossaryInstruction, eventInfo: eventInfo, interpretGuide: interpretGuide)
+        clientB.connect(apiKey: apiKey, sourceLang: langA, targetLang: langB, glossaryInstruction: glossaryInstruction, eventInfo: eventInfo, interpretGuide: interpretGuide)
     }
 
     func sendAudio(_ data: Data) {

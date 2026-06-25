@@ -2,8 +2,12 @@
 //  OverlayWindow.swift
 //  BoothmateG
 //
-//  Version: 1.37.0
+//  Version: 1.40.0
 //  Changelog:
+//    1.40.0 - 컨트롤 버튼(설정·X) 호버 표시가 들쭉날쭉하던 문제 수정. 핸들(OverlayResizeHandle)이
+//             SwiftUI 호스팅 뷰 위(.above)에 있어 마우스 추적을 가로채 SwiftUI .onHover가 불안정했음.
+//             핸들의 mouseEntered/Exited/Moved로 호버 상태(uiState.hovering)를 직접 구동 → .onHover와 OR로
+//             보강해 버튼이 항상 안정적으로 나타나게 함. (드래그 동작은 그대로)
 //    1.39.0 - [확실 수정] 확정 자막을 단어 토큰별로 그리고 각 단어를 가로 고정(fixedSize)해 줄 끝에서
 //             단어(H.E. 등)가 쪼개지지 않게 함. nbsp로 묶인 등록 구절도 한 토큰 유지. (KaraokeFlowLayout 재사용)
 //    1.38.0 - (무효) 약어 마침표 뒤 word joiner(U+2060) 시도 — SwiftUI가 무시해 효과 없었음.
@@ -126,6 +130,8 @@ class OverlayPanel: NSPanel {
 @MainActor
 final class OverlayUIState: ObservableObject {
     @Published var settingsOpen: Bool = false
+    // v1.40.0: 핸들 NSView가 주는 안정적 호버 신호. SwiftUI .onHover가 핸들에 가려 놓치는 경우 보강.
+    @Published var hovering: Bool = false
 }
 
 @MainActor
@@ -194,6 +200,10 @@ final class OverlayWindowController {
                 let btnArea = NSRect(x: bounds.width - 80, y: bounds.height - 50, width: 80, height: 50)
                 if btnArea.contains(p) { return true }
                 return false
+            }
+            // v1.40.0: 핸들이 받는 마우스 입·출입을 SwiftUI 호버 상태로 전달(컨트롤 버튼 표시 안정화).
+            handle.onHoverChange = { [weak self] hovering in
+                self?.uiState.hovering = hovering
             }
             handle.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(handle, positioned: .above, relativeTo: hosting.view)
@@ -310,6 +320,8 @@ class OverlayResizeHandle: NSView {
     private let edgeThreshold: CGFloat = 6
     // SwiftUI로 클릭을 통과시킬지 판정 (버튼/설정 패널 영역). 컨트롤러가 주입.
     var shouldPassThrough: ((NSPoint, NSRect) -> Bool)?
+    // v1.40.0: 호버 진입/이탈을 컨트롤러로 알림(SwiftUI .onHover 보강 → 컨트롤 버튼 표시 안정화).
+    var onHoverChange: ((Bool) -> Void)?
     private enum Edge { case none, left, right, top, bottom, topLeft, topRight, bottomLeft, bottomRight }
     private var currentEdge: Edge = .none
     private var initialMouse: NSPoint = .zero
@@ -340,7 +352,11 @@ class OverlayResizeHandle: NSView {
         return .none
     }
 
+    // v1.40.0: 핸들이 호스팅 뷰 위에 있어 마우스 추적을 가로채므로, 호버 상태를 여기서 직접 알린다.
+    override func mouseEntered(with event: NSEvent) { onHoverChange?(true) }
+
     override func mouseMoved(with event: NSEvent) {
+        onHoverChange?(true)   // 입장 이벤트를 놓쳐도 이동만으로 호버 true 보장
         applyCursor(at: convert(event.locationInWindow, from: nil))
     }
 
@@ -380,7 +396,7 @@ class OverlayResizeHandle: NSView {
         }
         return fallback
     }
-    override func mouseExited(with event: NSEvent) { NSCursor.arrow.set() }
+    override func mouseExited(with event: NSEvent) { NSCursor.arrow.set(); onHoverChange?(false) }
     // v1.16.0: 시스템이 커서 갱신을 요청할 때(비활성 창에서도 호출됨)도 동일하게 적용.
     override func cursorUpdate(with event: NSEvent) {
         applyCursor(at: convert(event.locationInWindow, from: nil))
@@ -629,8 +645,10 @@ struct OverlayContentView: View {
             }
             .padding(10)
             // v1.26.0: 호버 또는 설정 열림일 때만 보이게(평소엔 자막만 깔끔히)
-            .opacity((isHovering || uiState.settingsOpen) ? 1 : 0)
+            // v1.40.0: SwiftUI .onHover(isHovering)가 핸들에 가려 놓칠 때를 대비해 핸들 신호(uiState.hovering)도 OR.
+            .opacity((isHovering || uiState.hovering || uiState.settingsOpen) ? 1 : 0)
             .animation(.easeInOut(duration: 0.18), value: isHovering)
+            .animation(.easeInOut(duration: 0.18), value: uiState.hovering)
             .animation(.easeInOut(duration: 0.18), value: uiState.settingsOpen)
 
             // ── 설정 패널 (창 높이를 넘으면 내부 스크롤; 창 크기는 그대로 유지) ──
