@@ -6,9 +6,11 @@
 <meta name="theme-color" content="#ffffff">
 <title>실시간 자막 · Live Subtitles</title>
 <!--
-  BoothmateG 청중용 자막 페이지 (sub.html)  v1.11.0
+  BoothmateG 청중용 자막 페이지 (sub.html)  v1.12.0
   ───────────────────────────────────────────────────────────────────────
   변경:
+    1.12.0 - 행사용 글꼴 적용: meta.fontUrl(호스트가 올린 .ttf/.otf)을 @font-face로 동적 로드해 자막에 적용.
+             없으면 기존 시스템 폰트. (앱 FirebaseRelay 2.8.0 uploadFont와 짝)
     1.11.0 - 하단 'friend QR' 버튼 명칭 '친구 QR' → 'QR 보기', 아이콘을 QR 모양(인라인 SVG)으로 교체.
     1.10.0 - 청중 편의: 자막 글자 굵기 조절(B−/B+, 기억) + '친구에게 QR 보여주기'(지금 보는 링크를
              QR로 띄워 옆 사람이 스캔해 입장). QRCode 라이브러리(esm CDN) 사용.
@@ -318,6 +320,18 @@ function renderHeader(){
   if (meta.logoUrl){ logoEl.src = meta.logoUrl; logoEl.style.display = ""; }
   else { logoEl.style.display = "none"; }
   liveBadge.classList.toggle("on", meta.active !== false);
+  if (meta.fontUrl) applyEventFont(meta.fontUrl);   // v1.12.0: 행사용 글꼴 적용
+}
+
+// v1.12.0: 행사용 글꼴 — meta.fontUrl을 @font-face로 동적 로드해 자막(.lines)에 적용 (1회만)
+let eventFontApplied = false;
+function applyEventFont(url){
+  if (eventFontApplied || !url) return;
+  eventFontApplied = true;
+  const st = document.createElement("style");
+  st.textContent = "@font-face{font-family:'EventFont';src:url('" + url + "');font-display:swap;}"
+    + ".lines{font-family:'EventFont', system-ui, -apple-system, sans-serif;}";
+  document.head.appendChild(st);
 }
 
 async function setupLangs(){

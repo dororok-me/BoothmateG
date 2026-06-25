@@ -2,8 +2,10 @@
 //  FirebaseRelay.swift
 //  BoothmateG
 //
-//  Version: 2.7.0
+//  Version: 2.8.0
 //  Changelog:
+//    2.8.0 - 행사용 글꼴 업로드(uploadFont) 추가: 호스트가 고른 글꼴(.ttf/.otf)을 Storage에 올리고
+//            meta.fontUrl을 PATCH → 청중 sub.html이 자막에 그 글꼴을 적용. startBroadcast에 fontPath 추가.
 //    2.7.0 - 구글 로그인 이메일을 키체인(googleEmail)에 저장 → 앱 재실행 자동복원 시에도
 //            "Google 계정" 대신 실제 이메일을 표시. signOut에서 함께 삭제.
 //    2.6.0 - [멀티유저 자막 경로 분리] 자막을 sessions/{sid} → sessions/{uid}/{sid}로 저장.
@@ -259,7 +261,7 @@ final class FirebaseRelay: ObservableObject {
     // MARK: - 송출 (기존 API 유지)
 
     func startBroadcast(sessionId: String, eventName: String, sessionName: String,
-                        mode: String, langs: [String: String], logoPath: String = "") {
+                        mode: String, langs: [String: String], logoPath: String = "", fontPath: String = "") {
         self.sessionId = sessionId
         self.sessionOwnerUID = authUID   // v2.6.0: 송출 경로 소유자 UID 캡처
         self.active = true
@@ -279,6 +281,10 @@ final class FirebaseRelay: ObservableObject {
         // 행사 로고가 있으면 Storage에 올리고 meta.logoUrl을 채움(완료되면 청중 화면에 표시)
         if !logoPath.isEmpty {
             uploadLogo(sessionId: sessionId, path: logoPath)
+        }
+        // v2.8.0: 행사용 글꼴이 지정돼 있으면 Storage에 올리고 meta.fontUrl을 채움
+        if !fontPath.isEmpty {
+            uploadFont(sessionId: sessionId, path: fontPath)
         }
     }
 
@@ -391,6 +397,48 @@ final class FirebaseRelay: ObservableObject {
                     dl += "&token=\(dtoken)"
                 }
                 self.send("PATCH", "sessions/\(self.sessionOwnerUID)/\(sessionId)/meta", ["logoUrl": dl])
+            }.resume()
+        }
+    }
+
+    // MARK: - 행사용 글꼴 업로드 (v2.8.0)
+    // 호스트가 고른 글꼴(.ttf/.otf)을 Storage(audio/{sid}/font.ext)에 올리고,
+    // 성공하면 meta.fontUrl을 PATCH → 청중 sub.html이 자막에 그 글꼴을 적용.
+    func uploadFont(sessionId: String, path: String) {
+        guard !sessionId.isEmpty, !path.isEmpty else { return }
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)), !data.isEmpty else { return }
+
+        let ext = (path as NSString).pathExtension.lowercased()
+        let mime: String
+        switch ext {
+        case "otf":   mime = "font/otf"
+        case "ttc":   mime = "font/collection"
+        case "woff":  mime = "font/woff"
+        case "woff2": mime = "font/woff2"
+        default:      mime = "font/ttf"
+        }
+        let safeExt = ext.isEmpty ? "ttf" : ext
+        let objectPath = "audio/\(sessionId)/font.\(safeExt)"
+        let enc = objectPath.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? objectPath
+
+        withToken { token in
+            guard let token else { return }
+            let up = "https://firebasestorage.googleapis.com/v0/b/\(Self.storageBucket)/o?uploadType=media&name=\(enc)"
+            guard let url = URL(string: up) else { return }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("Firebase \(token)", forHTTPHeaderField: "Authorization")
+            req.setValue(mime, forHTTPHeaderField: "Content-Type")
+            req.httpBody = data
+            URLSession.shared.dataTask(with: req) { data, _, _ in
+                guard let data,
+                      let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+                var dl = "https://firebasestorage.googleapis.com/v0/b/\(Self.storageBucket)/o/\(enc)?alt=media"
+                if let dtoken = (j["downloadTokens"] as? String)?.components(separatedBy: ",").first,
+                   !dtoken.isEmpty {
+                    dl += "&token=\(dtoken)"
+                }
+                self.send("PATCH", "sessions/\(self.sessionOwnerUID)/\(sessionId)/meta", ["fontUrl": dl])
             }.resume()
         }
     }

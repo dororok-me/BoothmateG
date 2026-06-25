@@ -2,8 +2,11 @@
 //  OverlayWindow.swift
 //  BoothmateG
 //
-//  Version: 1.34.0
+//  Version: 1.36.0
 //  Changelog:
+//    1.36.0 - 진행 중(카라오케) 실시간 자막에도 커스텀 글꼴 적용. KaraokeCurrentLine에 fontPSName 전달.
+//    1.35.0 - 행사용 커스텀 글꼴 적용(번역 자막·원문). 오버레이 설정에 '글꼴' 선택 행 추가
+//             (CustomFont로 .ttf/.otf 선택·런타임 등록). 미지정 시 기존 시스템 폰트 유지.
 //    1.34.0 - 진행 중 자막을 카라오케(KaraokeCurrentLine)로 연결. 그동안 카라오케 코드는 있었으나
 //             진행 자막이 일반 EditableSubtitleText로 그려져 새 단어가 툭 박혔음. 이제 인식되는 새 단어가
 //             왼쪽에서 페이드+슬라이드되며 부드럽게 등장(실시간 단어 표출 유지). 외곽선 색·번짐도 카라오케에 전달.
@@ -472,6 +475,9 @@ struct OverlayContentView: View {
     @AppStorage("ov_fontSize")     private var fontSize: Double = 34
     @AppStorage("ov_fontColorHex") private var fontColorHex: String = "#FBBF24"
     @AppStorage("ov_fontBold")     private var fontBold: Bool = true
+    // v1.35.0: 행사용 커스텀 글꼴 (앱 저장소 내 파일 경로 + PostScript 이름). 빈 값이면 시스템 폰트.
+    @AppStorage("ov_fontFile")     private var fontFilePath: String = ""
+    @AppStorage("ov_fontPSName")   private var fontPSName: String = ""
     @AppStorage("ov_textStroke")   private var textStroke: Bool = true
     // v1.29.0: 글자 테두리(그림자) 세부 설정 — 어떤 창에서도 조절 가능
     @AppStorage("ov_strokeColorHex") private var strokeColorHex: String = "#000000"  // 테두리 색
@@ -534,7 +540,8 @@ struct OverlayContentView: View {
                                         stroke: textStroke,
                                         strokeColorHex: strokeColorHex,
                                         strokeBlur: strokeBlur,
-                                        lineSpacing: CGFloat(textLineSpacing)
+                                        lineSpacing: CGFloat(textLineSpacing),
+                                        fontPSName: fontPSName
                                     )
                                     .fixedSize(horizontal: false, vertical: true)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -654,6 +661,12 @@ struct OverlayContentView: View {
         )
     }
 
+    // v1.35.0: 커스텀 글꼴이 지정돼 있으면 그걸로, 아니면 시스템 폰트
+    private func subtitleFont(_ size: Double, bold: Bool = false) -> Font {
+        fontPSName.isEmpty ? .system(size: size, weight: bold ? .bold : .regular)
+                           : .custom(fontPSName, size: size)
+    }
+
     // ── 자막 한 줄 ──
     @ViewBuilder
     private func overlayRow(_ seg: SubtitleSegment) -> some View {
@@ -661,7 +674,7 @@ struct OverlayContentView: View {
             // 원문 (옵션)
             if showSource && !seg.sourceText.isEmpty {
                 Text(seg.sourceText)
-                    .font(.system(size: srcFontSize))
+                    .font(subtitleFont(srcFontSize))
                     .foregroundColor(Color(hex: srcColorHex).opacity(0.6))
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -674,7 +687,7 @@ struct OverlayContentView: View {
                     store.updateTarget(id: seg.id, newText: editText)
                     editingID = nil
                 })
-                .font(.system(size: fontSize, weight: fontBold ? .bold : .regular))
+                .font(subtitleFont(fontSize, bold: fontBold))
                 .foregroundColor(Color(hex: fontColorHex))
                 .textFieldStyle(.plain)
                 .padding(.horizontal, innerMargin)
@@ -685,7 +698,7 @@ struct OverlayContentView: View {
             } else {
                 // 글로서리 적용된 텍스트를 표시 (저장소 원본은 그대로 유지)
                 Text(spacedAttr((displayPolish ?? glossary.normalize)(seg.targetText)))
-                    .font(.system(size: fontSize, weight: fontBold ? .bold : .regular))
+                    .font(subtitleFont(fontSize, bold: fontBold))
                     .foregroundColor(Color(hex: fontColorHex))
                     .modifier(StrokeModifier(enabled: textStroke, colorHex: strokeColorHex, width: 1.0, blur: strokeBlur))
                     .lineSpacing(textLineSpacing)
@@ -748,6 +761,21 @@ struct OverlayContentView: View {
 
             // 번역 자막
             Text("번역 자막").font(.subheadline.weight(.semibold))
+            // v1.35.0: 행사용 글꼴 선택 (.ttf/.otf). 미지정 시 시스템 폰트.
+            sRow("글꼴") {
+                Button(fontPSName.isEmpty ? "선택…" : "변경") {
+                    if let picked = CustomFont.pickAndRegister() {
+                        fontFilePath = picked.path; fontPSName = picked.psName
+                    }
+                }.controlSize(.small)
+                if fontPSName.isEmpty {
+                    Text("기본 글꼴").font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text(fontPSName).font(.caption2).lineLimit(1).truncationMode(.middle)
+                        .frame(maxWidth: 110, alignment: .leading)
+                    Button("기본") { fontFilePath = ""; fontPSName = "" }.controlSize(.small)
+                }
+            }
             sRow("크기") {
                 Slider(value: $fontSize, in: 16...80, step: 1).frame(width: 120)
                 Text("\(Int(fontSize))pt").frame(width: 34).font(.caption)
@@ -937,6 +965,7 @@ struct KaraokeCurrentLine: View {
     var strokeColorHex: String = "#000000"   // v1.34.0: 확정 자막과 외곽선 색 일치
     var strokeBlur: Double = 3.0             // v1.34.0: 외곽선 번짐(그림자)
     var lineSpacing: CGFloat = 0
+    var fontPSName: String = ""              // v1.35.0: 커스텀 글꼴(빈 값이면 시스템 폰트)
 
     private var words: [String] {
         text.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
@@ -947,7 +976,8 @@ struct KaraokeCurrentLine: View {
         KaraokeFlowLayout(spacing: 0, lineSpacing: lineSpacing) {
             ForEach(Array(words.enumerated()), id: \.offset) { _, word in
                 Text(word + " ")
-                    .font(.system(size: fontSize, weight: bold ? .bold : .regular))
+                    .font(fontPSName.isEmpty ? .system(size: fontSize, weight: bold ? .bold : .regular)
+                                             : .custom(fontPSName, size: fontSize))
                     .foregroundColor(color)
                     .modifier(StrokeModifier(enabled: stroke, colorHex: strokeColorHex, width: 1.0, blur: strokeBlur))
                     .transition(.asymmetric(

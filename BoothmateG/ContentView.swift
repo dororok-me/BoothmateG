@@ -2,8 +2,10 @@
 //  ContentView.swift
 //  BoothmateG
 //
-//  Version: 2.89.0
+//  Version: 2.91.0
 //  Changelog:
+//    2.91.0 - 송출 시작 시 오버레이 행사용 글꼴(ov_fontFile)을 청중에게도 업로드(startBroadcast fontPath).
+//    2.90.0 - 앱 시작(onAppear) 시 저장된 행사용 글꼴 재등록(CustomFont.register) — 오버레이 커스텀 글꼴 유지.
 //    2.89.0 - 우측 하단 로그인 표시 형식을 "'{이메일}'으로 로그인됨"으로 변경(이메일을 작은따옴표로 강조).
 //    2.88.0 - 하단 "호스트"/"로그인" 버튼을 우측 하단으로 이동 + 로그인 시 "{이메일}으로 로그인 됨" 표시
 //             (로그인된 계정을 한눈에 확인. 클릭 시 로그인/로그아웃 창은 그대로). 멀티유저 대비.
@@ -274,6 +276,8 @@ struct ContentView: View {
             audienceLangs = settings.loadAudienceLangs()   // v2.68.0: [통합] 화자 제외 필터 폐기
             multiStore.setLanguages(audienceLangs)
             eventInfo = settings.loadEventInfo()   // v2.84.0: 행사정보 영구저장본 불러오기
+            // v2.90.0: 저장된 행사용 글꼴 재등록(런타임 등록은 앱 재시작 시 사라지므로)
+            CustomFont.register(path: UserDefaults.standard.string(forKey: "ov_fontFile") ?? "")
         }
         .onChange(of: settings.playTranslatedAudio) { _, on in
             if on && isRunning { audioPlayer.start() } else { audioPlayer.stop() }
@@ -1254,7 +1258,8 @@ struct ContentView: View {
         }
         relay.startBroadcast(sessionId: broadcastSessionId, eventName: info.event,
                                      sessionName: info.session, mode: mode, langs: langs,
-                                     logoPath: currentEventLogoPath)
+                                     logoPath: currentEventLogoPath,
+                                     fontPath: UserDefaults.standard.string(forKey: "ov_fontFile") ?? "")
         audioBroadcaster.start(sessionId: broadcastSessionId)
         statusMessage = "📡 청중 송출 중"
     }
